@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   Download, TrendingUp, CheckCircle2, AlertTriangle, FileSpreadsheet,
@@ -1416,7 +1416,7 @@ function TrendingDown({ className }: { className?: string }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ReportsPage() {
+function ReportsPageInner() {
   const { currentUser } = useCurrentUser()
   const searchParams    = useSearchParams()
   const isVendor        = currentUser.role === 'vendor'
@@ -2375,5 +2375,13 @@ export default function ReportsPage() {
         )}
       </div>
     </>
+  )
+}
+
+export default function ReportsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ReportsPageInner />
+    </Suspense>
   )
 }
