@@ -12,20 +12,33 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      {/* Inline script runs before paint — prevents flash of wrong theme */}
       <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('drishti-theme');if(t==='dark'){document.documentElement.classList.add('dark')}else if(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches){document.documentElement.classList.add('dark')}}catch(e){}})()`,
-          }}
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+          rel="stylesheet"
         />
       </head>
-      <body className="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased transition-colors duration-200">
+      <body style={{
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        background:  'var(--ds-bg)',
+        color:       'var(--ds-text)',
+        margin:      0,
+        padding:     0,
+        minHeight:   '100vh',
+        WebkitFontSmoothing: 'antialiased',
+      }}>
         <Providers>
           <Suspense fallback={null}>
             <Sidebar />
           </Suspense>
-          <main className="md:ml-60 min-h-screen pt-14">
+          <main style={{
+            marginLeft:  'var(--ds-sidebar-width)',
+            minHeight:   '100vh',
+            background:  'var(--ds-bg)',
+            paddingTop:  52,
+          }}
+            className="max-md:ml-0"
+          >
             {children}
           </main>
         </Providers>

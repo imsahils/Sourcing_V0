@@ -1,3 +1,7 @@
+/* ── Manju Design System — WMS Default Variant ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* Keep Tailwind for shadcn/ui compatibility */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -48,8 +52,64 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── Manju Design Tokens ──────────────────────────────────────────────────────── */
 :root {
-  --background: oklch(1 0 0);
+  /* Brand — Terra-cotta */
+  --ds-primary:        #CC785C;
+  --ds-primary-dark:   #B5633E;
+  --ds-primary-light:  #FDF0EB;
+  --ds-primary-ring:   rgba(204, 120, 92, 0.22);
+
+  /* Semantic */
+  --ds-success:        #2E7D52;
+  --ds-success-bg:     #EDFAF4;
+  --ds-success-border: #A7E8C8;
+  --ds-warning:        #92400E;
+  --ds-warning-bg:     #FFFBEB;
+  --ds-warning-border: #FDE68A;
+  --ds-danger:         #B91C1C;
+  --ds-danger-bg:      #FEF2F2;
+  --ds-danger-border:  #FECACA;
+  --ds-info:           #1D4ED8;
+  --ds-info-bg:        #EFF6FF;
+  --ds-info-border:    #BFDBFE;
+
+  /* Neutrals — Warm Stone */
+  --ds-text:           #1C1917;
+  --ds-text-secondary: #78716C;
+  --ds-text-tertiary:  #A8A29E;
+  --ds-border:         #E7E5E0;
+  --ds-border-strong:  #D6D3CD;
+  --ds-bg:             #FAF9F6;
+  --ds-bg-subtle:      #F5F4EF;
+  --ds-surface:        #FFFFFF;
+
+  /* Sidebar */
+  --ds-sidebar-width:     240px;
+  --ds-sidebar-bg:        #FFFFFF;
+  --ds-sidebar-border:    #EEEDE8;
+  --ds-sidebar-active-bg: #FDF0EB;
+  --ds-sidebar-active:    #CC785C;
+
+  /* Radius */
+  --ds-radius-sm:   6px;
+  --ds-radius:      10px;
+  --ds-radius-lg:   14px;
+  --ds-radius-xl:   18px;
+  --ds-radius-full: 999px;
+
+  /* Shadow */
+  --ds-shadow-xs: 0 1px 2px rgba(0,0,0,0.05);
+  --ds-shadow-sm: 0 1px 4px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.04);
+  --ds-shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+  --ds-shadow-lg: 0 12px 32px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.04);
+
+  /* Transitions */
+  --ds-t-fast: 0.12s ease;
+  --ds-t-base: 0.18s ease;
+
+  /* Shadcn compat */
+  --background: oklch(0.99 0.003 80);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -83,126 +143,151 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+html { height: 100%; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--ds-bg);
+  color: var(--ds-text);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
 }
 
+a { color: var(--ds-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Manju Buttons ───────────────────────────────────────────────────────────── */
+.ds-btn {
+  cursor: pointer;
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 7px 15px;
+  transition: all var(--ds-t-fast);
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ds-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.ds-btn-primary { background: var(--ds-primary); color: #fff; box-shadow: 0 1px 3px rgba(204,120,92,0.35); border: none; }
+.ds-btn-primary:hover:not(:disabled) { background: var(--ds-primary-dark); box-shadow: 0 2px 6px rgba(204,120,92,0.4); }
+
+.ds-btn-secondary { background: var(--ds-surface); color: var(--ds-text); border: 1px solid var(--ds-border); box-shadow: var(--ds-shadow-xs); }
+.ds-btn-secondary:hover:not(:disabled) { background: var(--ds-bg-subtle); border-color: var(--ds-border-strong); }
+
+.ds-btn-ghost { background: transparent; color: var(--ds-text-secondary); border: 1px solid transparent; }
+.ds-btn-ghost:hover:not(:disabled) { background: var(--ds-bg-subtle); color: var(--ds-text); }
+
+.ds-btn-danger { background: var(--ds-danger); color: #fff; box-shadow: 0 1px 3px rgba(185,28,28,0.28); border: none; }
+.ds-btn-danger:hover:not(:disabled) { background: #991B1B; }
+
+.ds-btn-sm { padding: 4px 10px; font-size: 12.5px; }
+.ds-btn-lg { padding: 10px 20px; font-size: 15px; border-radius: var(--ds-radius); }
+.ds-btn-icon { padding: 7px; border-radius: var(--ds-radius-sm); }
+
+/* ── Manju Cards ─────────────────────────────────────────────────────────────── */
+.ds-card { background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-lg); padding: 20px; box-shadow: var(--ds-shadow-sm); }
+.ds-card-flat { background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-lg); padding: 20px; }
+
+/* ── Manju Badges ────────────────────────────────────────────────────────────── */
+.ds-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: var(--ds-radius-full); font-size: 11.5px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; }
+.ds-badge-green  { background: var(--ds-success-bg);    color: var(--ds-success);      border: 1px solid var(--ds-success-border); }
+.ds-badge-yellow { background: var(--ds-warning-bg);    color: var(--ds-warning);      border: 1px solid var(--ds-warning-border); }
+.ds-badge-red    { background: var(--ds-danger-bg);     color: var(--ds-danger);       border: 1px solid var(--ds-danger-border);  }
+.ds-badge-blue   { background: var(--ds-info-bg);       color: var(--ds-info);         border: 1px solid var(--ds-info-border);    }
+.ds-badge-orange { background: var(--ds-primary-light); color: var(--ds-primary-dark); border: 1px solid #F3C9B7; }
+.ds-badge-gray   { background: var(--ds-bg-subtle);     color: var(--ds-text-secondary); border: 1px solid var(--ds-border); }
+
+/* ── Manju Alerts ────────────────────────────────────────────────────────────── */
+.ds-alert { padding: 11px 16px; border-radius: var(--ds-radius); margin-bottom: 16px; font-size: 13.5px; display: flex; align-items: flex-start; gap: 10px; }
+.ds-alert-error   { background: var(--ds-danger-bg);  color: var(--ds-danger);  border: 1px solid var(--ds-danger-border);  }
+.ds-alert-success { background: var(--ds-success-bg); color: var(--ds-success); border: 1px solid var(--ds-success-border); }
+.ds-alert-warning { background: var(--ds-warning-bg); color: var(--ds-warning); border: 1px solid var(--ds-warning-border); }
+.ds-alert-info    { background: var(--ds-info-bg);    color: var(--ds-info);    border: 1px solid var(--ds-info-border);    }
+
+/* ── Manju Spinner ───────────────────────────────────────────────────────────── */
+.ds-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: ds-spin 0.65s linear infinite; flex-shrink: 0; }
+.ds-spinner-dark { border-color: rgba(28,25,23,0.15); border-top-color: var(--ds-primary); }
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+
+/* ── Manju Page Header ───────────────────────────────────────────────────────── */
+.ds-page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 26px; gap: 16px; }
+.ds-page-header h1 { font-size: 22px; font-weight: 700; color: var(--ds-text); letter-spacing: -0.02em; }
+.ds-page-header p  { color: var(--ds-text-secondary); margin-top: 3px; font-size: 13.5px; }
+
+/* ── Manju Stat Card ─────────────────────────────────────────────────────────── */
+.ds-stat-card { background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-lg); padding: 20px 22px; box-shadow: var(--ds-shadow-sm); }
+.ds-stat-card .ds-stat-label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ds-text-tertiary); margin-bottom: 10px; }
+.ds-stat-card .ds-stat-value { font-size: 30px; font-weight: 700; letter-spacing: -0.03em; color: var(--ds-text); line-height: 1; }
+.ds-stat-card .ds-stat-sub   { font-size: 12px; color: var(--ds-text-secondary); margin-top: 6px; }
+
+/* ── Manju Tabs ──────────────────────────────────────────────────────────────── */
+.ds-tabs { display: flex; gap: 2px; background: var(--ds-bg-subtle); border: 1px solid var(--ds-border); border-radius: var(--ds-radius); padding: 4px; width: fit-content; }
+.ds-tab-btn { background: transparent; color: var(--ds-text-secondary); border: none; border-radius: 7px; padding: 7px 16px; font-size: 13.5px; font-weight: 500; cursor: pointer; transition: all var(--ds-t-fast); }
+.ds-tab-btn:hover { color: var(--ds-text); background: var(--ds-surface); }
+.ds-tab-btn.active { background: var(--ds-surface); color: var(--ds-primary); box-shadow: var(--ds-shadow-xs); font-weight: 600; }
+
+/* ── Manju Filter Pills ──────────────────────────────────────────────────────── */
+.ds-filter-pill { padding: 5px 13px; border-radius: var(--ds-radius-full); font-size: 12.5px; font-weight: 500; border: 1px solid var(--ds-border); background: var(--ds-surface); color: var(--ds-text-secondary); cursor: pointer; transition: all var(--ds-t-fast); }
+.ds-filter-pill:hover { border-color: var(--ds-primary); color: var(--ds-primary); }
+.ds-filter-pill.active { background: var(--ds-primary-light); border-color: var(--ds-primary); color: var(--ds-primary-dark); font-weight: 600; }
+
+/* ── Manju Table ─────────────────────────────────────────────────────────────── */
+.ds-table { width: 100%; border-collapse: collapse; }
+.ds-table thead tr { border-bottom: 1px solid var(--ds-border); }
+.ds-table th { text-align: left; padding: 10px 14px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ds-text-tertiary); background: var(--ds-bg-subtle); white-space: nowrap; }
+.ds-table th:first-child { border-radius: var(--ds-radius-sm) 0 0 var(--ds-radius-sm); }
+.ds-table th:last-child  { border-radius: 0 var(--ds-radius-sm) var(--ds-radius-sm) 0; }
+.ds-table td { padding: 12px 14px; border-bottom: 1px solid var(--ds-border); color: var(--ds-text); font-size: 13.5px; }
+.ds-table tbody tr:last-child td { border-bottom: none; }
+.ds-table tbody tr { transition: background var(--ds-t-fast); }
+.ds-table tbody tr:hover td { background: var(--ds-bg); }
+
+/* ── Manju Empty State ───────────────────────────────────────────────────────── */
+.ds-empty-state { text-align: center; padding: 64px 24px; color: var(--ds-text-secondary); }
+.ds-empty-state .ds-empty-icon { font-size: 40px; margin-bottom: 14px; opacity: 0.6; }
+.ds-empty-state h3 { font-size: 16px; font-weight: 600; color: var(--ds-text); margin-bottom: 6px; }
+.ds-empty-state p  { font-size: 13.5px; }
+
+/* ── Manju Modal ─────────────────────────────────────────────────────────────── */
+.ds-modal-overlay { position: fixed; inset: 0; background: rgba(28,25,23,0.45); display: flex; align-items: center; justify-content: center; z-index: 500; backdrop-filter: blur(2px); padding: 20px; }
+.ds-modal { background: var(--ds-surface); border-radius: var(--ds-radius-xl); padding: 28px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--ds-shadow-lg); }
+.ds-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
+.ds-modal-header h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--ds-text); }
+.ds-modal-close { background: var(--ds-bg-subtle); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-sm); width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--ds-text-secondary); cursor: pointer; padding: 0; flex-shrink: 0; }
+.ds-modal-close:hover { background: var(--ds-danger-bg); color: var(--ds-danger); border-color: var(--ds-danger-border); }
+
+/* ── Manju Form ──────────────────────────────────────────────────────────────── */
+.ds-form-group { margin-bottom: 16px; }
+.ds-form-group label { display: block; margin-bottom: 5px; font-size: 13px; font-weight: 500; color: var(--ds-text); }
+.ds-form-hint { font-size: 11.5px; color: var(--ds-text-tertiary); margin-top: 4px; }
+
+/* ── Manju Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ds-border-strong); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ds-text-tertiary); }
+
+/* ── Manju Animations ────────────────────────────────────────────────────────── */
+@keyframes ds-fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.ds-fade-in { animation: ds-fadeIn 0.2s ease forwards; }
+
+/* ── Utility overrides ───────────────────────────────────────────────────────── */
+/* Hide scrollbar but keep scroll functionality */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Keep shadcn base layer for components that rely on it */
 @layer base {
   * {
     @apply border-border outline-ring/50;
     box-sizing: border-box;
   }
-  body {
-    @apply bg-slate-50 text-slate-900;
-    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  html {
-    @apply font-sans;
-  }
-
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-
-  .dark ::-webkit-scrollbar-thumb { background: #475569; }
-  .dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
-}
-
-/* Status badge variants */
-.status-on-track    { @apply bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300; }
-.status-attention   { @apply bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300; }
-.status-overdue     { @apply bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300; }
-.status-completed   { @apply bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300; }
-.status-not-started { @apply bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400; }
-
-/* Progress stage states */
-.stage-done    { @apply bg-green-500 text-white; }
-.stage-active  { @apply bg-violet-600 text-white ring-2 ring-violet-200 dark:ring-violet-800; }
-.stage-pending { @apply bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700; }
-
-/* Hide scrollbar but keep scroll functionality */
-.no-scrollbar::-webkit-scrollbar { display: none; }
-.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-
-/* ── Dark-mode surface overrides ─────────────────────────────────────────────
-   These upgrade the most common hardcoded light-mode colours so pages
-   respond to the .dark class without touching every component individually.
-   ─────────────────────────────────────────────────────────────────────────── */
-.dark {
-  /* Page / card surfaces */
-  --tw-bg-white-override: theme(colors.slate.900);
-
-  /* Table & list rows */
-  color-scheme: dark;
-}
-
-/* White cards → dark card surface */
-.dark .bg-white   { background-color: rgb(15 23 42);  }   /* slate-950 */
-.dark .bg-slate-50  { background-color: rgb(15 23 42);  }  /* slate-950 */
-.dark .bg-slate-100 { background-color: rgb(30 41 59);  }  /* slate-800 */
-
-/* Borders */
-.dark .border-slate-100 { border-color: rgb(30 41 59);  }  /* slate-800 */
-.dark .border-slate-200 { border-color: rgb(51 65 85);  }  /* slate-700 */
-.dark .border-slate-300 { border-color: rgb(71 85 105); }  /* slate-600 */
-
-/* Text */
-.dark .text-slate-900 { color: rgb(248 250 252); }          /* slate-50  */
-.dark .text-slate-800 { color: rgb(226 232 240); }          /* slate-200 */
-.dark .text-slate-700 { color: rgb(203 213 225); }          /* slate-300 */
-.dark .text-slate-600 { color: rgb(148 163 184); }          /* slate-400 */
-.dark .text-slate-500 { color: rgb(100 116 139); }          /* slate-500 */
-
-/* Hover overrides for interactive rows */
-.dark .hover\:bg-slate-50:hover  { background-color: rgb(30 41 59 / 0.6); }
-.dark .hover\:bg-slate-100:hover { background-color: rgb(30 41 59);       }
-
-/* Input / select / textarea */
-.dark input,
-.dark select,
-.dark textarea {
-  background-color: rgb(30 41 59);
-  border-color: rgb(51 65 85);
-  color: rgb(226 232 240);
-}
-.dark input::placeholder,
-.dark textarea::placeholder { color: rgb(100 116 139); }
-
-/* Dropdown / popover panels */
-.dark [class*="shadow-lg"],
-.dark [class*="shadow-xl"],
-.dark [class*="shadow-2xl"] {
-  --tw-shadow-color: rgb(0 0 0 / 0.5);
 }

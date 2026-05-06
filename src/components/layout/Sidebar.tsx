@@ -3,27 +3,22 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useSidebar } from '@/lib/sidebar-context'
-import { cn } from '@/lib/utils'
 import { useCurrentUser, type UserRole } from '@/lib/user-context'
 import {
   Inbox, LayoutGrid, Building2, BarChart2, Settings,
   Layers, Users, ClipboardCheck, CheckSquare, Warehouse,
   Star, UserCog, ClipboardList, Plus, GitMerge,
-  ChevronDown, Search, IndianRupee, LogOut, Sun, Moon,
+  ChevronDown, Search, IndianRupee, LogOut,
   FlaskConical, Package, Factory, ScanLine, Truck,
 } from 'lucide-react'
-import { useTheme } from '@/lib/theme-context'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type SubItem = {
-  label: string
-  tab: string
-}
+type SubItem = { label: string; tab: string }
 
 type NavItem = {
   label: string
   href: string
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>
   badge?: number | null
   section: 'poc' | 'mgr' | 'qa' | 'ops'
   visibleTo: UserRole[] | 'all'
@@ -32,11 +27,7 @@ type NavItem = {
 
 // ─── Nav Config ───────────────────────────────────────────────────────────────
 const navItems: NavItem[] = [
-  // POC
-  {
-    label: 'My Queue', href: '/queue', icon: Inbox, badge: 8, section: 'poc',
-    visibleTo: ['sourcing-poc', 'sourcing-mgr'],
-  },
+  { label: 'My Queue',        href: '/queue',            icon: Inbox,         badge: 8, section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr'] },
   {
     label: 'My Portfolio', href: '/portfolio', icon: LayoutGrid, section: 'poc',
     visibleTo: ['sourcing-poc', 'sourcing-mgr'],
@@ -59,69 +50,20 @@ const navItems: NavItem[] = [
       { label: 'Order Assignment', tab: 'assignment' },
     ],
   },
-  {
-    label: 'Sampling', href: '/sampling', icon: FlaskConical, section: 'poc',
-    visibleTo: ['designer', 'fit-technician'],
-  },
-  {
-    label: 'Purchase Orders', href: '/purchase-orders', icon: Package, section: 'poc',
-    visibleTo: ['sourcing-mis'],
-  },
-  {
-    label: 'Vendors', href: '/vendors', icon: Building2, section: 'poc',
-    visibleTo: ['sourcing-poc', 'sourcing-mgr'],
-  },
-  {
-    label: 'Reports / DPR', href: '/reports', icon: BarChart2, section: 'poc',
-    visibleTo: ['sourcing-poc', 'sourcing-mgr', 'category-head', 'buying-poc'],
-  },
-  // Vendor-only split items
-  {
-    label: 'Daily Production', href: '/reports?view=dpr', icon: Factory, section: 'poc',
-    visibleTo: ['vendor'],
-  },
-  {
-    label: 'Order Costing', href: '/reports?view=costing', icon: IndianRupee, section: 'poc',
-    visibleTo: ['vendor'],
-  },
-  {
-    label: 'Pre-Production', href: '/vendor-portal', icon: FlaskConical, section: 'poc',
-    visibleTo: ['vendor'],
-  },
-
-  // Management
-  {
-    label: 'Manager Queue', href: '/manager', icon: Users, section: 'mgr',
-    visibleTo: ['sourcing-mgr'],
-  },
-  {
-    label: 'Category Head', href: '/category-head', icon: Star, section: 'mgr',
-    visibleTo: ['sourcing-mgr', 'category-head'],
-  },
-
-  // QA
-  {
-    label: 'Inspections', href: '/inspections', icon: Search, section: 'qa',
-    visibleTo: ['qa-inspector', 'qa-mgr'],
-  },
-  {
-    label: 'QA Dashboard', href: '/qa', icon: ClipboardCheck, section: 'qa',
-    visibleTo: ['qa-mgr'],
-  },
-  {
-    label: 'Sample Approvals', href: '/approvals', icon: CheckSquare, section: 'qa',
-    visibleTo: ['qa-inspector', 'qa-mgr'],
-  },
-
-  // Ops
-  {
-    label: 'Warehouse / GRN', href: '/warehouse', icon: Warehouse, section: 'ops',
-    visibleTo: ['warehouse-ops'],
-  },
-  {
-    label: 'Vendor Portal', href: '/vendor-portal', icon: UserCog, section: 'ops',
-    visibleTo: ['warehouse-ops', 'sourcing-poc', 'sourcing-mgr'],
-  },
+  { label: 'Sampling',        href: '/sampling',         icon: FlaskConical,  section: 'poc', visibleTo: ['designer', 'fit-technician'] },
+  { label: 'Purchase Orders', href: '/purchase-orders',  icon: Package,       section: 'poc', visibleTo: ['sourcing-mis'] },
+  { label: 'Vendors',         href: '/vendors',          icon: Building2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr'] },
+  { label: 'Reports / DPR',   href: '/reports',          icon: BarChart2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr', 'category-head', 'buying-poc'] },
+  { label: 'Daily Production',href: '/reports?view=dpr', icon: Factory,       section: 'poc', visibleTo: ['vendor'] },
+  { label: 'Order Costing',   href: '/reports?view=costing', icon: IndianRupee, section: 'poc', visibleTo: ['vendor'] },
+  { label: 'Pre-Production',  href: '/vendor-portal',    icon: FlaskConical,  section: 'poc', visibleTo: ['vendor'] },
+  { label: 'Manager Queue',   href: '/manager',          icon: Users,         section: 'mgr', visibleTo: ['sourcing-mgr'] },
+  { label: 'Category Head',   href: '/category-head',    icon: Star,          section: 'mgr', visibleTo: ['sourcing-mgr', 'category-head'] },
+  { label: 'Inspections',     href: '/inspections',      icon: Search,        section: 'qa',  visibleTo: ['qa-inspector', 'qa-mgr'] },
+  { label: 'QA Dashboard',    href: '/qa',               icon: ClipboardCheck,section: 'qa',  visibleTo: ['qa-mgr'] },
+  { label: 'Sample Approvals',href: '/approvals',        icon: CheckSquare,   section: 'qa',  visibleTo: ['qa-inspector', 'qa-mgr'] },
+  { label: 'Warehouse / GRN', href: '/warehouse',        icon: Warehouse,     section: 'ops', visibleTo: ['warehouse-ops'] },
+  { label: 'Vendor Portal',   href: '/vendor-portal',    icon: UserCog,       section: 'ops', visibleTo: ['warehouse-ops', 'sourcing-poc', 'sourcing-mgr'] },
 ]
 
 const sectionMeta: Record<string, { label: string }> = {
@@ -130,8 +72,7 @@ const sectionMeta: Record<string, { label: string }> = {
   ops: { label: 'Operations' },
 }
 
-// Sub-item icon map
-const subIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+const subIcons: Record<string, React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>> = {
   dashboard:        LayoutGrid,
   grid:             LayoutGrid,
   new:              Plus,
@@ -144,27 +85,201 @@ const subIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   asn:              Truck,
 }
 
+// ─── Styles (inline with DS tokens) ──────────────────────────────────────────
+const S = {
+  aside: {
+    position:    'fixed' as const,
+    top:         0,
+    left:        0,
+    height:      '100%',
+    width:       'var(--ds-sidebar-width)',
+    background:  'var(--ds-sidebar-bg)',
+    borderRight: '1px solid var(--ds-sidebar-border)',
+    display:     'flex',
+    flexDirection: 'column' as const,
+    zIndex:      30,
+    transition:  'transform 0.3s ease',
+  },
+  logoWrap: {
+    padding:      '18px 18px 14px',
+    borderBottom: '1px solid var(--ds-sidebar-border)',
+    display:      'flex',
+    alignItems:   'center',
+    gap:          10,
+  },
+  logoIcon: {
+    width:          34,
+    height:         34,
+    borderRadius:   10,
+    background:     'var(--ds-primary)',
+    display:        'flex',
+    alignItems:     'center',
+    justifyContent: 'center',
+    flexShrink:     0,
+  },
+  logoTitle: {
+    fontSize:      15,
+    fontWeight:    700,
+    color:         'var(--ds-text)',
+    letterSpacing: '-0.01em',
+    lineHeight:    1.2,
+  },
+  logoSub: {
+    fontSize: 11,
+    color:    'var(--ds-text-tertiary)',
+    marginTop: 1,
+  },
+  nav: {
+    flex:       1,
+    padding:    '10px 10px',
+    overflowY:  'auto' as const,
+  },
+  sectionDivider: {
+    marginTop: 12,
+    marginBottom: 4,
+    paddingLeft: 10,
+    fontSize:   10,
+    fontWeight: 700,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.08em',
+    color:       'var(--ds-text-tertiary)',
+  },
+  sectionLine: {
+    borderTop:    '1px solid var(--ds-sidebar-border)',
+    marginBottom: 8,
+    marginTop:    2,
+  },
+  navLink: (active: boolean): React.CSSProperties => ({
+    display:        'flex',
+    alignItems:     'center',
+    gap:            9,
+    padding:        '8px 10px',
+    borderRadius:   'var(--ds-radius)',
+    marginBottom:   2,
+    textDecoration: 'none',
+    background:     active ? 'var(--ds-sidebar-active-bg)' : 'transparent',
+    color:          active ? 'var(--ds-sidebar-active)' : 'var(--ds-text-secondary)',
+    fontWeight:     active ? 600 : 400,
+    fontSize:       13.5,
+    transition:     'all var(--ds-t-fast)',
+    position:       'relative',
+    cursor:         'pointer',
+    borderLeft:     `2px solid ${active ? 'var(--ds-primary)' : 'transparent'}`,
+  }),
+  navLinkHover: {
+    background: 'var(--ds-bg-subtle)',
+    color:      'var(--ds-text)',
+  },
+  subLink: (active: boolean): React.CSSProperties => ({
+    display:        'flex',
+    alignItems:     'center',
+    gap:            7,
+    padding:        '7px 10px',
+    borderRadius:   'var(--ds-radius-sm)',
+    marginBottom:   1,
+    textDecoration: 'none',
+    background:     active ? 'var(--ds-primary-light)' : 'transparent',
+    color:          active ? 'var(--ds-primary-dark)' : 'var(--ds-text-secondary)',
+    fontWeight:     active ? 600 : 400,
+    fontSize:       12.5,
+    transition:     'all var(--ds-t-fast)',
+    cursor:         'pointer',
+  }),
+  badge: (active: boolean): React.CSSProperties => ({
+    padding:         '1px 6px',
+    borderRadius:    'var(--ds-radius-full)',
+    fontSize:        10.5,
+    fontWeight:      700,
+    background:      active ? 'var(--ds-primary)' : 'var(--ds-danger)',
+    color:           '#fff',
+    flexShrink:      0,
+  }),
+  chevron: (expanded: boolean): React.CSSProperties => ({
+    width:      12,
+    height:     12,
+    flexShrink: 0,
+    transition: 'transform 0.2s ease',
+    transform:  expanded ? 'rotate(180deg)' : 'none',
+  }),
+  userWrap: {
+    borderTop:  '1px solid var(--ds-sidebar-border)',
+    padding:    '10px 12px',
+    display:    'flex',
+    alignItems: 'center',
+    gap:        10,
+  },
+  avatar: (color: string): React.CSSProperties => ({
+    width:          32,
+    height:         32,
+    borderRadius:   '50%',
+    background:     color || 'var(--ds-primary)',
+    display:        'flex',
+    alignItems:     'center',
+    justifyContent: 'center',
+    color:          '#fff',
+    fontSize:       12,
+    fontWeight:     700,
+    flexShrink:     0,
+  }),
+  userName: {
+    fontSize:     13,
+    fontWeight:   600,
+    color:        'var(--ds-text)',
+    overflow:     'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace:   'nowrap' as const,
+    lineHeight:   1.2,
+  },
+  userRole: {
+    fontSize: 11,
+    color:    'var(--ds-text-tertiary)',
+    marginTop: 1,
+  },
+  iconBtn: {
+    background:  'none',
+    border:      'none',
+    padding:     6,
+    borderRadius: 'var(--ds-radius-sm)',
+    cursor:      'pointer',
+    color:       'var(--ds-text-tertiary)',
+    display:     'flex',
+    alignItems:  'center',
+    flexShrink:  0,
+    transition:  'all var(--ds-t-fast)',
+  },
+}
+
+// Avatar colour map — terra-cotta palette
+const AVATAR_COLORS: Record<string, string> = {
+  'sourcing-poc':   '#CC785C',
+  'sourcing-mgr':   '#B5633E',
+  'category-head':  '#92400E',
+  'buying-poc':     '#1D4ED8',
+  'qa-mgr':         '#2E7D52',
+  'warehouse-ops':  '#6B7280',
+  'vendor':         '#78716C',
+  'sourcing-mis':   '#A8A29E',
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export function Sidebar() {
-  const path           = usePathname()
-  const searchParams   = useSearchParams()
-  const currentTab     = searchParams.get('tab') ?? ''
+  const path         = usePathname()
+  const searchParams = useSearchParams()
+  const currentTab   = searchParams.get('tab') ?? ''
   const { currentUser } = useCurrentUser()
   const { open: mobileOpen, close: closeMobile } = useSidebar()
-  const { theme, toggleTheme } = useTheme()
 
   const role = currentUser.role
 
-  // Independent open/close state per section — not tied to active route
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    // Pre-open whichever section is currently active on first load
     const initial = navItems
       .filter(i => i.subItems && path.startsWith(i.href))
       .map(i => i.href)
     return new Set(initial)
   })
 
-  // When the path changes to a new section, auto-open it (but never auto-close others)
+  const [hovered, setHovered] = useState<string | null>(null)
+
   useEffect(() => {
     const activeHref = navItems.find(i => i.subItems && path.startsWith(i.href))?.href
     if (activeHref) {
@@ -205,176 +320,162 @@ export function Sidebar() {
   }
 
   const visibleItems = navItems.filter(isVisible)
+  const avatarColor = AVATAR_COLORS[role] ?? 'var(--ds-primary)'
 
   return (
     <>
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-20 md:hidden"
           onClick={closeMobile}
+          style={{
+            position:   'fixed',
+            inset:      0,
+            background: 'rgba(28,25,23,0.5)',
+            zIndex:     20,
+            display:    'block',
+          }}
+          className="md:hidden"
         />
       )}
 
-    <aside
-      className={cn(
-        'fixed top-0 left-0 h-full w-60 flex flex-col z-30 border-r transition-transform duration-300',
-        'bg-white dark:bg-[#101828] border-slate-200 dark:border-slate-800',
-        // Mobile: hidden by default, slide in when open
-        mobileOpen ? 'translate-x-0' : '-translate-x-full',
-        // Desktop: always visible
-        'md:translate-x-0'
-      )}
-    >
-      {/* ── Logo ── */}
-      <div className="px-5 pt-5 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-[#7F56D9] flex items-center justify-center">
-            <Layers className="w-4 h-4 text-white" />
+      <aside
+        style={{
+          ...S.aside,
+          transform: mobileOpen ? 'translateX(0)' : undefined,
+        }}
+        className={mobileOpen ? '' : '-translate-x-full md:translate-x-0'}
+      >
+        {/* ── Logo ── */}
+        <div style={S.logoWrap}>
+          <div style={S.logoIcon}>
+            <Layers size={16} color="#fff" strokeWidth={2} />
           </div>
           <div>
-            <p className="text-slate-900 dark:text-white font-semibold text-sm leading-tight">Fabricate</p>
-            <p className="text-slate-400 dark:text-slate-500 text-xs">Nautinati · AW 26</p>
+            <div style={S.logoTitle}>Fabricate</div>
+            <div style={S.logoSub}>Nautinati · AW 26</div>
           </div>
         </div>
-      </div>
 
-      {/* ── Nav ── */}
-      <nav className="flex-1 px-3 py-3 overflow-y-auto">
-        {visibleItems.map((item, i) => {
-          const active = isActive(item.href)
-          const Icon   = item.icon
+        {/* ── Nav ── */}
+        <nav style={S.nav}>
+          {visibleItems.map((item, i) => {
+            const active      = isActive(item.href)
+            const Icon        = item.icon
+            const prevItem    = visibleItems[i - 1]
+            const showDivider = prevItem && prevItem.section !== item.section && !!sectionMeta[item.section]
+            const isExpanded  = item.subItems ? openSections.has(item.href) : false
+            const isHovered   = hovered === item.href
 
-          // Determine if section divider is needed
-          const prevItem  = visibleItems[i - 1]
-          const showDivider =
-            prevItem &&
-            prevItem.section !== item.section &&
-            !!sectionMeta[item.section]
-
-          // Expanded = has been opened via state, NOT tied to active route
-          const isExpanded = item.subItems ? openSections.has(item.href) : false
-
-          return (
-            <div key={item.href}>
-              {showDivider && (
-                <div className="mt-3 mb-1.5">
-                  <div className="border-t border-slate-200 dark:border-slate-800 mb-2" />
-                  <p className="text-xs text-slate-400 dark:text-slate-600 font-semibold uppercase tracking-wider px-3">
-                    {sectionMeta[item.section]?.label}
-                  </p>
-                </div>
-              )}
-
-              {/* Main nav item */}
-              <Link
-                href={item.subItems ? `${item.href}?tab=${item.subItems[0].tab}` : item.href}
-                onClick={closeMobile}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150 mb-0.5',
-                  active
-                    ? 'bg-violet-50 dark:bg-violet-600/20 text-violet-700 dark:text-white border-l-2 border-violet-500 dark:border-[#7F56D9]'
-                    : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-200 border-l-2 border-transparent'
+            return (
+              <div key={item.href}>
+                {showDivider && (
+                  <div>
+                    <div style={S.sectionLine} />
+                    <div style={S.sectionDivider}>{sectionMeta[item.section]?.label}</div>
+                  </div>
                 )}
-              >
-                <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                <span className="flex-1 font-medium text-xs">{item.label}</span>
-                {item.badge != null && item.badge > 0 && (
-                  <span className={cn(
-                    'px-1.5 py-0.5 rounded-full text-xs font-bold',
-                    active ? 'bg-violet-500 text-white' : 'bg-red-500/80 text-white'
-                  )}>
-                    {item.badge}
-                  </span>
-                )}
-                {/* Chevron: click toggles only this section, doesn't navigate */}
-                {item.subItems && (
-                  <span
-                    onClick={e => toggleSection(e, item.href)}
-                    className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                  >
-                    <ChevronDown className={cn(
-                      'w-3 h-3 text-slate-400 dark:text-slate-500 transition-transform duration-200',
-                      isExpanded && 'rotate-180'
-                    )} />
-                  </span>
-                )}
-              </Link>
 
-              {/* Sub-items — visible whenever section is open, regardless of route */}
-              {isExpanded && item.subItems && (
-                <div className="ml-6 mb-1 space-y-0.5">
-                  {item.subItems.map(sub => {
-                    const SubIcon = subIcons[sub.tab]
-                    const isSubActive = path.startsWith(item.href) && currentTab === sub.tab
-                    return (
-                      <Link
-                        key={sub.tab}
-                        href={`${item.href}?tab=${sub.tab}`}
-                        onClick={closeMobile}
-                        className={cn(
-                          'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all duration-150 border-l-2',
-                          isSubActive
-                            ? 'bg-violet-50 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300 border-violet-400 dark:border-violet-500'
-                            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-200 border-transparent'
-                        )}
-                      >
-                        {SubIcon && <SubIcon className="w-3 h-3 flex-shrink-0" />}
-                        <span className="font-medium">{sub.label}</span>
-                      </Link>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )
-        })}
+                {/* Main nav item */}
+                <Link
+                  href={item.subItems ? `${item.href}?tab=${item.subItems[0].tab}` : item.href}
+                  onClick={closeMobile}
+                  onMouseEnter={() => setHovered(item.href)}
+                  onMouseLeave={() => setHovered(null)}
+                  style={{
+                    ...S.navLink(active),
+                    ...(isHovered && !active ? { background: 'var(--ds-bg-subtle)', color: 'var(--ds-text)' } : {}),
+                  }}
+                >
+                  <Icon size={14} color="currentColor" strokeWidth={1.8} />
+                  <span style={{ flex: 1, fontSize: 13 }}>{item.label}</span>
 
-        {/* Settings */}
-        <div className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-3">
-          <Link
-            href="/settings"
-            className={cn(
-              'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150 border-l-2',
-              path === '/settings'
-                ? 'bg-violet-50 dark:bg-violet-600/20 text-violet-700 dark:text-white border-violet-500'
-                : 'text-slate-500 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-300 border-transparent'
-            )}
+                  {item.badge != null && item.badge > 0 && (
+                    <span style={S.badge(active)}>{item.badge}</span>
+                  )}
+
+                  {item.subItems && (
+                    <span
+                      onClick={e => toggleSection(e, item.href)}
+                      style={{ padding: 2, borderRadius: 4, cursor: 'pointer', display: 'flex' }}
+                    >
+                      <ChevronDown
+                        size={12}
+                        color="var(--ds-text-tertiary)"
+                        style={S.chevron(isExpanded)}
+                      />
+                    </span>
+                  )}
+
+                  {active && !item.subItems && (
+                    <span style={{
+                      width: 5, height: 5, borderRadius: '50%',
+                      background: 'var(--ds-primary)', flexShrink: 0,
+                    }} />
+                  )}
+                </Link>
+
+                {/* Sub-items */}
+                {isExpanded && item.subItems && (
+                  <div style={{ marginLeft: 20, marginBottom: 4 }}>
+                    {item.subItems.map(sub => {
+                      const SubIcon   = subIcons[sub.tab]
+                      const isSubActive = path.startsWith(item.href) && currentTab === sub.tab
+                      return (
+                        <Link
+                          key={sub.tab}
+                          href={`${item.href}?tab=${sub.tab}`}
+                          onClick={closeMobile}
+                          style={S.subLink(isSubActive)}
+                          onMouseEnter={e => { if (!isSubActive) { (e.currentTarget as HTMLElement).style.background = 'var(--ds-bg-subtle)'; (e.currentTarget as HTMLElement).style.color = 'var(--ds-text)' } }}
+                          onMouseLeave={e => { if (!isSubActive) { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--ds-text-secondary)' } }}
+                        >
+                          {SubIcon && <SubIcon size={12} color="currentColor" strokeWidth={1.8} />}
+                          <span style={{ fontSize: 12.5 }}>{sub.label}</span>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+
+          {/* Settings */}
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--ds-sidebar-border)', paddingTop: 10 }}>
+            <Link
+              href="/settings"
+              onClick={closeMobile}
+              style={S.navLink(path === '/settings')}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--ds-bg-subtle)' }}
+              onMouseLeave={e => { if (path !== '/settings') (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
+              <Settings size={14} color="currentColor" strokeWidth={1.8} />
+              <span style={{ flex: 1, fontSize: 13 }}>Settings</span>
+            </Link>
+          </div>
+        </nav>
+
+        {/* ── User Footer ── */}
+        <div style={S.userWrap}>
+          <div style={S.avatar(avatarColor)}>
+            {currentUser.initials}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={S.userName}>{currentUser.name}</div>
+            <div style={S.userRole}>{currentUser.roleLabel}</div>
+          </div>
+          <button
+            onClick={() => { import('@/lib/api/auth').then(m => m.logout()) }}
+            style={S.iconBtn}
+            title="Log out"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--ds-danger-bg)'; (e.currentTarget as HTMLElement).style.color = 'var(--ds-danger)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; (e.currentTarget as HTMLElement).style.color = 'var(--ds-text-tertiary)' }}
           >
-            <Settings className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="font-medium text-xs">Settings</span>
-          </Link>
+            <LogOut size={14} strokeWidth={1.8} />
+          </button>
         </div>
-      </nav>
-
-      {/* ── User info + Logout ── */}
-      <div className="border-t border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center gap-3">
-        <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0', currentUser.color)}>
-          {currentUser.initials}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-slate-900 dark:text-white text-xs font-medium truncate">{currentUser.name}</p>
-          <p className="text-slate-400 dark:text-slate-500 text-xs truncate">{currentUser.roleLabel}</p>
-        </div>
-        <button
-          onClick={toggleTheme}
-          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
-          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          {theme === 'dark'
-            ? <Sun className="w-3.5 h-3.5" />
-            : <Moon className="w-3.5 h-3.5" />
-          }
-        </button>
-        <button
-          onClick={() => { import('@/lib/api/auth').then(m => m.logout()) }}
-          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
-          title="Log out"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </aside>
+      </aside>
     </>
   )
 }
