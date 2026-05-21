@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { fetchSubOrders, fetchSubOrder, type ApiSubOrder, type SubOrderFilters } from '@/lib/api/orders'
+import { apiOrderToSubOrder } from '@/lib/api/adapters'
 import { subOrders as mockSubOrders } from '@/lib/data'
 import type { SubOrder } from '@/lib/types'
 
@@ -78,7 +79,7 @@ export function useSubOrders(filters: SubOrderFilters = {}) {
 }
 
 export function useSubOrder(id: string) {
-  const [data,    setData]    = useState<ApiSubOrder | null>(null)
+  const [data,    setData]    = useState<SubOrder | null>(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState<string | null>(null)
 
@@ -87,10 +88,10 @@ export function useSubOrder(id: string) {
     setLoading(true)
     setError(null)
     fetchSubOrder(id)
-      .then(data => { setData(data); setLoading(false) })
+      .then(apiData => { setData(apiOrderToSubOrder(apiData)); setLoading(false) })
       .catch(() => {
-        // Fall back to mock data
-        const mock = MOCK_API_ORDERS.find(o => o.id === id) ?? null
+        // Fall back to original mock objects — preserves all fields (vendorRFQs, rfqStatus, etc.)
+        const mock = mockSubOrders.find(o => o.id === id) ?? null
         setData(mock)
         if (!mock) setError(`Order ${id} not found`)
         setLoading(false)

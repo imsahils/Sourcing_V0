@@ -32,12 +32,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Sidebar />
           </Suspense>
           <main style={{
-            marginLeft:  'var(--ds-sidebar-width)',
             minHeight:   '100vh',
             background:  'var(--ds-bg)',
             paddingTop:  52,
           }}
-            className="max-md:ml-0"
+            className="ml-0 md:ml-[var(--ds-sidebar-width)]"
           >
             {children}
           </main>

@@ -1,10 +1,143 @@
 'use client'
 import { useState, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
-import { Search, MapPin, TrendingUp, TrendingDown, Minus, Star, Package, AlertTriangle } from 'lucide-react'
+import { Search, MapPin, TrendingUp, TrendingDown, Minus, Star, Package, AlertTriangle, X, Phone, Mail, BarChart3, CheckCircle2, Clock, ChevronRight } from 'lucide-react'
 import { Header } from '@/components/layout/Header'
 import { vendors, subOrders } from '@/lib/data'
 import { cn } from '@/lib/utils'
+import type { Vendor } from '@/lib/types'
+
+// ─── Vendor Profile Modal ─────────────────────────────────────────────────────
+
+function VendorProfileModal({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
+  const vendorOrders  = subOrders.filter(s => s.vendor.id === vendor.id)
+  const activeOrders  = vendorOrders.filter(s => s.status !== 'completed')
+  const overdueOrders = vendorOrders.filter(s => s.status === 'overdue')
+  const completedOrders = vendorOrders.filter(s => s.status === 'completed')
+
+  const stageLabel: Record<string, string> = {
+    'order-brief': 'Order Brief', assigned: 'Assigned', vendor: 'Vendor',
+    costing: 'Costing', 'pre-prod': 'Pre-Production', production: 'Production',
+    fi: 'Final Inspection', asn: 'ASN', grn: 'GRN',
+  }
+
+  const metrics = [
+    { label: 'OTIF Score',      value: `${vendor.otifScore ?? '—'}%`,   color: (vendor.otifScore ?? 0) >= 75 ? 'text-green-600' : (vendor.otifScore ?? 0) >= 60 ? 'text-amber-600' : 'text-red-600' },
+    { label: 'FI Pass Rate',    value: `${vendor.fiPassRate ?? '—'}%`,   color: (vendor.fiPassRate ?? 0) >= 85 ? 'text-green-600' : (vendor.fiPassRate ?? 0) >= 70 ? 'text-amber-600' : 'text-red-600' },
+    { label: 'Active Orders',   value: String(activeOrders.length),      color: 'text-violet-700' },
+    { label: 'Completed',       value: String(completedOrders.length),   color: 'text-slate-700' },
+    { label: 'Overdue',         value: String(overdueOrders.length),     color: overdueOrders.length > 0 ? 'text-red-600' : 'text-slate-400' },
+    { label: 'Total Orders',    value: String(vendorOrders.length),      color: 'text-slate-700' },
+  ]
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-200 flex items-start justify-between flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-violet-600 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
+              {vendor.name.charAt(0)}
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-900 text-base">{vendor.name}</h3>
+              <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
+                <MapPin className="w-3.5 h-3.5" />{vendor.location}
+                {vendor.tier && <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">{vendor.tier}</span>}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {/* Contact */}
+          {(vendor.contactName || vendor.contactPhone || vendor.contactEmail) && (
+            <div className="px-6 py-4 border-b border-slate-100">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Contact</p>
+              <div className="flex flex-wrap gap-4 text-sm">
+                {vendor.contactName && (
+                  <span className="text-slate-700 font-medium">{vendor.contactName}</span>
+                )}
+                {vendor.contactPhone && (
+                  <a href={`tel:${vendor.contactPhone}`} className="flex items-center gap-1.5 text-slate-600 hover:text-violet-600 transition-colors">
+                    <Phone className="w-3.5 h-3.5" />{vendor.contactPhone}
+                  </a>
+                )}
+                {vendor.contactEmail && (
+                  <a href={`mailto:${vendor.contactEmail}`} className="flex items-center gap-1.5 text-slate-600 hover:text-violet-600 transition-colors">
+                    <Mail className="w-3.5 h-3.5" />{vendor.contactEmail}
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Performance metrics */}
+          <div className="px-6 py-4 border-b border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+              <BarChart3 className="w-3.5 h-3.5" />Performance Metrics
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              {metrics.map(m => (
+                <div key={m.label} className="bg-slate-50 rounded-xl border border-slate-200 px-4 py-3 text-center">
+                  <p className={cn('text-xl font-bold', m.color)}>{m.value}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{m.label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Order history */}
+          <div className="px-6 py-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Order History</p>
+            {vendorOrders.length === 0 ? (
+              <div className="text-center py-8 text-slate-400">
+                <Package className="w-7 h-7 mx-auto mb-2 opacity-40" />
+                <p className="text-sm">No orders with this vendor yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {vendorOrders.map(order => (
+                  <div key={order.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-200 hover:bg-violet-50 transition-all cursor-pointer group">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-medium text-slate-900 truncate">{order.styleName}</p>
+                        <span className="text-xs text-slate-400">·</span>
+                        <p className="text-xs text-slate-500">{order.colour}</p>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">{order.id} · {order.category} · {order.season}</p>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">Stage</p>
+                        <p className="text-xs font-medium text-slate-700">{stageLabel[order.currentStage] ?? order.currentStage}</p>
+                      </div>
+                      <span className={cn('text-xs px-2 py-0.5 rounded-full border font-medium',
+                        order.status === 'completed'      ? 'bg-green-50 text-green-700 border-green-200' :
+                        order.status === 'overdue'        ? 'bg-red-50 text-red-600 border-red-200' :
+                        order.status === 'needs-attention'? 'bg-amber-50 text-amber-600 border-amber-200' :
+                        'bg-slate-100 text-slate-500 border-slate-200'
+                      )}>
+                        {order.status === 'needs-attention' ? 'Attention' : order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                      </span>
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">Handover</p>
+                        <p className="text-xs font-medium text-slate-700">{new Date(order.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</p>
+                      </div>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-violet-400 transition-colors" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ─── Vendor score chip ────────────────────────────────────────────────────────
 
@@ -26,14 +159,14 @@ function ScoreChip({ value, label }: { value: number; label: string }) {
 
 // ─── Vendor Card ──────────────────────────────────────────────────────────────
 
-function VendorCard({ vendor }: { vendor: typeof vendors[0] }) {
+function VendorCard({ vendor, onClick }: { vendor: typeof vendors[0]; onClick: () => void }) {
   const vendorOrders  = subOrders.filter(s => s.vendor.id === vendor.id)
   const activeOrders  = vendorOrders.filter(s => s.status !== 'completed')
   const overdueOrders = vendorOrders.filter(s => s.status === 'overdue')
   const atRiskOrders  = vendorOrders.filter(s => s.atRisk)
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow cursor-pointer group">
+    <div onClick={onClick} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md hover:border-violet-200 transition-all cursor-pointer group">
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div>
@@ -85,7 +218,7 @@ function VendorCard({ vendor }: { vendor: typeof vendors[0] }) {
 
 // ─── Vendor Performance Table ─────────────────────────────────────────────────
 
-function VendorTable() {
+function VendorTable({ onVendorClick }: { onVendorClick: (v: Vendor) => void }) {
   const rows = vendors.map(v => {
     const orders    = subOrders.filter(s => s.vendor.id === v.id)
     const completed = orders.filter(s => s.status === 'completed').length
@@ -111,7 +244,7 @@ function VendorTable() {
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={row.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
+              <tr key={row.id} onClick={() => onVendorClick(row)} className="border-b border-slate-100 last:border-0 hover:bg-violet-50 cursor-pointer transition-colors">
                 <td className="px-4 py-3">
                   <div className={cn('w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold',
                     i === 0 ? 'bg-yellow-400 text-yellow-900' :
@@ -173,8 +306,9 @@ function VendorTable() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function VendorsPage() {
-  const [search, setSearch] = useState('')
-  const [view, setView]     = useState<'cards' | 'table'>('cards')
+  const [search, setSearch]           = useState('')
+  const [view, setView]               = useState<'cards' | 'table'>('cards')
+  const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null)
 
   const filtered = useMemo(() =>
     vendors.filter(v =>
@@ -188,6 +322,9 @@ export default function VendorsPage() {
 
   return (
     <>
+      {selectedVendor && (
+        <VendorProfileModal vendor={selectedVendor} onClose={() => setSelectedVendor(null)} />
+      )}
       <Header title="Vendors" subtitle={`${vendors.length} active vendors · Nautinati SS25`} />
       <div className="px-6 py-6">
         {/* Summary strip */}
@@ -230,10 +367,10 @@ export default function VendorsPage() {
 
         {view === 'cards' ? (
           <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.map(v => <VendorCard key={v.id} vendor={v} />)}
+            {filtered.map(v => <VendorCard key={v.id} vendor={v} onClick={() => setSelectedVendor(v)} />)}
           </div>
         ) : (
-          <VendorTable />
+          <VendorTable onVendorClick={v => setSelectedVendor(v)} />
         )}
       </div>
     </>

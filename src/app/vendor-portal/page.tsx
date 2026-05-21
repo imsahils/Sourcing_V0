@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   CheckCircle2, AlertCircle, Info, X, Calendar, Clock,
   Edit3, BarChart3, Upload, Building2, MapPin, IndianRupee,
@@ -7,7 +8,7 @@ import {
   ChevronRight, AlertTriangle, RotateCcw, FileText, Menu,
   FlaskConical, Truck, ChevronDown, ChevronUp, CheckCheck,
 } from 'lucide-react'
-import type { SubOrder, SampleRecord, SampleType } from '@/lib/types'
+import type { SubOrder, SampleRecord, SampleType, VendorRFQ, VendorRFQStatus } from '@/lib/types'
 import { Header } from '@/components/layout/Header'
 import { subOrders, vendors } from '@/lib/data'
 import { useCurrentUser } from '@/lib/user-context'
@@ -507,6 +508,406 @@ function SampleDispatchModal({
 
 // ─── Vendor View ──────────────────────────────────────────────────────────────
 
+// ─── RFQ Response Modal (vendor submits quote or declines) ────────────────────
+
+function RFQResponseModal({
+  rfq,
+  onClose,
+  onSubmit,
+  onDecline,
+}: {
+  rfq: VendorRFQ
+  onClose: () => void
+  onSubmit: (id: string, price: number, date: string, leadTime: number, capacity: number, notes: string) => void
+  onDecline: (id: string, reason: string) => void
+}) {
+  const [mode, setMode]         = useState<'respond' | 'decline'>('respond')
+  const [price, setPrice]       = useState('')
+  const [date, setDate]         = useState('')
+  const [leadTime, setLeadTime] = useState('')
+  const [capacity, setCapacity] = useState(String(rfq.orderQty))
+  const [notes, setNotes]       = useState('')
+  const [reason, setReason]     = useState('')
+  const [done, setDone]         = useState(false)
+
+  const handleSubmit = () => {
+    if (!price || !date || !capacity) return
+    setDone(true)
+    setTimeout(() => onSubmit(rfq.id, Number(price), date, Number(leadTime) || 0, Number(capacity), notes), 1200)
+  }
+
+  const handleDecline = () => {
+    setDone(true)
+    setTimeout(() => onDecline(rfq.id, reason), 1200)
+  }
+
+  if (done) {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-8 text-center shadow-xl max-w-sm w-full">
+          <div className={cn('w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3', mode === 'respond' ? 'bg-green-100' : 'bg-slate-100')}>
+            {mode === 'respond'
+              ? <CheckCircle2 className="w-6 h-6 text-green-600" />
+              : <X className="w-6 h-6 text-slate-500" />}
+          </div>
+          <p className="font-semibold text-slate-900 text-lg">{mode === 'respond' ? 'Quote Submitted!' : 'RFQ Declined'}</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {mode === 'respond' ? 'The sourcing team will review your quote.' : 'The sourcing team has been notified.'}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="font-semibold text-slate-900">Respond to RFQ</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{rfq.styleCode} · {rfq.styleName} · {rfq.colour}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Style brief */}
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Order Details</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              {[
+                ['Style Code', rfq.styleCode],
+                ['Colour', rfq.colour],
+                ['Category', rfq.category],
+                ['Fabric', rfq.fabricQuality],
+                ['Order Qty', `${rfq.orderQty} pcs`],
+                ['Target Price', `₹${rfq.targetPrice}/pc`],
+                ['Handover Date', new Date(rfq.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })],
+                ['Expires', new Date(rfq.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })],
+              ].map(([l, v]) => (
+                <div key={l}>
+                  <p className="text-xs text-slate-400">{l}</p>
+                  <p className="text-sm font-medium text-slate-800">{v}</p>
+                </div>
+              ))}
+            </div>
+            {rfq.techPackUrl && (
+              <a href={rfq.techPackUrl} target="_blank" rel="noopener noreferrer"
+                className="mt-3 flex items-center gap-2 text-xs text-violet-600 hover:underline font-medium">
+                <FileText className="w-3.5 h-3.5" />View Tech Pack
+              </a>
+            )}
+            {rfq.notes && (
+              <div className="mt-3 pt-3 border-t border-slate-200">
+                <p className="text-xs text-slate-400 mb-1">Notes from Sourcing</p>
+                <p className="text-xs text-slate-700">{rfq.notes}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Mode toggle */}
+          <div className="flex gap-2">
+            <button onClick={() => setMode('respond')} className={cn('flex-1 py-2 text-sm font-medium rounded-lg border transition-colors',
+              mode === 'respond' ? 'bg-violet-600 text-white border-violet-600' : 'text-slate-600 border-slate-200 hover:border-violet-300')}>
+              Submit Quote
+            </button>
+            <button onClick={() => setMode('decline')} className={cn('flex-1 py-2 text-sm font-medium rounded-lg border transition-colors',
+              mode === 'decline' ? 'bg-red-500 text-white border-red-500' : 'text-slate-600 border-slate-200 hover:border-red-200 hover:text-red-500')}>
+              Decline
+            </button>
+          </div>
+
+          {mode === 'respond' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Quoted Price (₹/pc) *</label>
+                  <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="e.g. 255"
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  {price && Number(price) > rfq.targetPrice && (
+                    <p className="text-xs text-red-500 mt-1">₹{Number(price) - rfq.targetPrice} above target</p>
+                  )}
+                  {price && Number(price) <= rfq.targetPrice && (
+                    <p className="text-xs text-green-600 mt-1">₹{rfq.targetPrice - Number(price)} below target</p>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Capacity (pcs) *</label>
+                  <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)}
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Promised Delivery Date *</label>
+                  <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Lead Time (days)</label>
+                  <input type="number" value={leadTime} onChange={e => setLeadTime(e.target.value)} placeholder="e.g. 60"
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1.5">Notes (optional)</label>
+                <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any conditions or clarifications..."
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1.5">Reason for declining (optional)</label>
+              <textarea rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Factory at full capacity until end of June..."
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-200 flex justify-between flex-shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
+          {mode === 'respond' ? (
+            <button onClick={handleSubmit} disabled={!price || !date || !capacity}
+              className="px-5 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-40 flex items-center gap-1.5">
+              <Send className="w-3.5 h-3.5" />Submit Quote
+            </button>
+          ) : (
+            <button onClick={handleDecline}
+              className="px-5 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-1.5">
+              Decline RFQ
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RFQ Inbox (vendor-facing) ────────────────────────────────────────────────
+
+function RFQInbox({ vendorId, companyName }: { vendorId: string; companyName: string }) {
+  // Collect all RFQs sent to this vendor from across all sub-orders
+  const allRFQs = subOrders.flatMap(s =>
+    (s.vendorRFQs ?? []).filter(r =>
+      r.vendor.id === vendorId || r.vendor.name.toLowerCase() === companyName.toLowerCase()
+    ).map(r => ({ ...r, subOrderStyleName: s.styleName, subOrderSeason: s.season }))
+  )
+
+  // For demo: show all RFQs from NNKNTW250021 if no vendor match
+  const rfqsToShow = allRFQs.length > 0 ? allRFQs
+    : subOrders.flatMap(s => (s.vendorRFQs ?? []).map(r => ({ ...r, subOrderStyleName: s.styleName, subOrderSeason: s.season })))
+
+  const [rfqs, setRfqs]     = useState(rfqsToShow)
+  const [activeRFQ, setActiveRFQ] = useState<VendorRFQ | null>(null)
+
+  const open     = rfqs.filter(r => r.status === 'sent')
+  const responded = rfqs.filter(r => r.status === 'responded')
+  const closed   = rfqs.filter(r => ['declined','accepted','rejected','expired','revoked'].includes(r.status))
+
+  const handleSubmit = (id: string, price: number, date: string, leadTime: number, capacity: number, notes: string) => {
+    setRfqs(prev => prev.map(r => r.id !== id ? r : {
+      ...r, status: 'responded' as VendorRFQStatus, quotedPrice: price,
+      vendorPromisedDate: date, leadTimeDays: leadTime, capacityQty: capacity,
+      respondedAt: new Date().toISOString(),
+    }))
+    setActiveRFQ(null)
+  }
+
+  const handleDecline = (id: string, reason: string) => {
+    setRfqs(prev => prev.map(r => r.id !== id ? r : {
+      ...r, status: 'declined' as VendorRFQStatus, declineReason: reason, respondedAt: new Date().toISOString(),
+    }))
+    setActiveRFQ(null)
+  }
+
+  const statusStyles: Partial<Record<VendorRFQStatus, string>> = {
+    sent:      'bg-blue-50 text-blue-700 border-blue-200',
+    responded: 'bg-violet-50 text-violet-700 border-violet-200',
+    declined:  'bg-red-50 text-red-600 border-red-200',
+    accepted:  'bg-green-50 text-green-700 border-green-200',
+    rejected:  'bg-slate-100 text-slate-500 border-slate-200',
+    expired:   'bg-slate-100 text-slate-500 border-slate-200',
+    revoked:   'bg-orange-50 text-orange-600 border-orange-200',
+  }
+  const statusLabels: Partial<Record<VendorRFQStatus, string>> = {
+    sent: 'Awaiting Response', responded: 'Quote Submitted', declined: 'Declined',
+    accepted: 'Order Confirmed', rejected: 'Not Selected', expired: 'Expired', revoked: 'Revoked',
+  }
+
+  return (
+    <div>
+      {activeRFQ && (
+        <RFQResponseModal
+          rfq={activeRFQ}
+          onClose={() => setActiveRFQ(null)}
+          onSubmit={handleSubmit}
+          onDecline={handleDecline}
+        />
+      )}
+
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        {[
+          { label: 'Awaiting Response', value: open.length,      color: 'blue'   },
+          { label: 'Quotes Submitted',  value: responded.length, color: 'violet' },
+          { label: 'Closed',            value: closed.length,    color: 'slate'  },
+        ].map(({ label, value, color }) => (
+          <div key={label} className={cn('rounded-xl border p-4',
+            color === 'blue' ? 'bg-blue-50 border-blue-200' :
+            color === 'violet' ? 'bg-violet-50 border-violet-200' : 'bg-slate-50 border-slate-200'
+          )}>
+            <p className={cn('text-2xl font-black',
+              color === 'blue' ? 'text-blue-700' :
+              color === 'violet' ? 'text-violet-700' : 'text-slate-600'
+            )}>{value}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* RFQ list */}
+      {rfqs.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-14 text-center">
+          <Send className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+          <p className="text-sm text-slate-400">No RFQs received yet</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {rfqs.map(rfq => (
+            <div key={rfq.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <p className="font-bold text-slate-900 text-sm">{rfq.styleName}</p>
+                      <span className={cn('text-xs px-2 py-0.5 rounded-full border font-medium', statusStyles[rfq.status])}>
+                        {statusLabels[rfq.status] ?? rfq.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">{rfq.styleCode} · {rfq.colour} · {rfq.category}</p>
+                    <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
+                      <span><span className="font-medium text-slate-700">{rfq.orderQty}</span> pcs</span>
+                      <span>Target <span className="font-medium text-slate-700">₹{rfq.targetPrice}/pc</span></span>
+                      <span>Handover <span className="font-medium text-slate-700">{new Date(rfq.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span></span>
+                    </div>
+                  </div>
+                  {rfq.status === 'sent' && (
+                    <div className="flex-shrink-0 text-right">
+                      <p className="text-xs text-slate-400 mb-1">
+                        Expires {new Date(rfq.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                      </p>
+                      <button
+                        onClick={() => setActiveRFQ(rfq)}
+                        className="px-3 py-1.5 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-700 font-medium transition-colors"
+                      >
+                        Respond
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Submitted quote summary */}
+                {rfq.status === 'responded' && rfq.quotedPrice !== undefined && (
+                  <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-xs text-slate-400">Your Quote</p>
+                      <p className="text-sm font-semibold text-violet-700">₹{rfq.quotedPrice}/pc</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Promised Date</p>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {rfq.vendorPromisedDate ? new Date(rfq.vendorPromisedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Capacity</p>
+                      <p className="text-sm font-semibold text-slate-800">{rfq.capacityQty} pcs</p>
+                    </div>
+                  </div>
+                )}
+
+                {rfq.status === 'accepted' && (
+                  <div className="mt-3 pt-3 border-t border-green-100 flex items-center gap-2 text-green-700">
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                    <p className="text-xs font-medium">Order confirmed — you will receive further instructions from the sourcing team.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── My Confirmed Orders (vendor-facing) ─────────────────────────────────────
+
+function MyConfirmedOrders({ vendorId, companyName }: { vendorId: string; companyName: string }) {
+  const myOrders = subOrders.filter(s =>
+    s.vendor.id === vendorId || s.vendor.name.toLowerCase() === companyName.toLowerCase()
+  )
+
+  const stageLabel: Record<string, string> = {
+    vendor: 'Vendor', costing: 'Costing', 'pre-prod': 'Pre-Production',
+    production: 'Production', fi: 'Final Inspection', asn: 'ASN', grn: 'GRN',
+  }
+
+  if (myOrders.length === 0) {
+    return (
+      <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-14 text-center">
+        <Package className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+        <p className="text-sm text-slate-400">No confirmed orders yet</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {myOrders.map(order => (
+        <div key={order.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <p className="font-bold text-slate-900 text-sm">{order.styleName}</p>
+                <span className={cn('text-xs px-2 py-0.5 rounded-full border font-medium',
+                  order.currentStage === 'production' ? 'bg-violet-50 text-violet-700 border-violet-200' :
+                  order.currentStage === 'costing'    ? 'bg-amber-50 text-amber-600 border-amber-200' :
+                  order.currentStage === 'pre-prod'   ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                  'bg-slate-100 text-slate-600 border-slate-200'
+                )}>
+                  {stageLabel[order.currentStage] ?? order.currentStage}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">{order.id} · {order.styleCode} · {order.colour} · {order.season}</p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-xs text-slate-400">Handover</p>
+              <p className="text-sm font-semibold text-slate-800">
+                {new Date(order.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-3 gap-3 text-center">
+            <div>
+              <p className="text-lg font-bold text-slate-900">{order.orderQty}</p>
+              <p className="text-xs text-slate-400">Order Qty</p>
+            </div>
+            <div>
+              <p className="text-lg font-bold text-violet-700">{order.cutQty}</p>
+              <p className="text-xs text-slate-400">Cut</p>
+            </div>
+            <div>
+              <p className="text-lg font-bold text-green-600">{order.packedQty}</p>
+              <p className="text-xs text-slate-400">Packed</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function VendorView() {
   const { currentUser } = useCurrentUser()
   const { toggle: toggleSidebar } = useSidebar()
@@ -532,6 +933,9 @@ function VendorView() {
   // Pre-production orders
   const preProdOrders = myOrders.filter(s => s.currentStage === 'pre-prod')
 
+  const searchParams = useSearchParams()
+  const viewParam    = (searchParams.get('view') as 'rfq' | 'pre-prod' | 'my-orders' | null)
+  const vendorTab: 'rfq' | 'pre-prod' | 'my-orders' = viewParam ?? 'rfq'
   const [prodModal,       setProdModal]       = useState<string | null>(null)
   const [dispatchModal,   setDispatchModal]   = useState<string | null>(null)
   const [expandedPreProd, setExpandedPreProd] = useState<Set<string>>(new Set(preProdOrders.map(o => o.id)))
@@ -602,6 +1006,10 @@ function VendorView() {
       </div>
 
       <div className="pt-16 px-4 md:px-6 pb-10">
+        {vendorTab === 'rfq' && <RFQInbox vendorId={vendorId} companyName={companyName} />}
+        {vendorTab === 'my-orders' && <MyConfirmedOrders vendorId={vendorId} companyName={companyName} />}
+
+        {vendorTab === 'pre-prod' && <>
         {/* ── Pre-prod summary strip ── */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           {[
@@ -991,6 +1399,7 @@ function VendorView() {
             <p className="text-xs text-slate-400 mt-1">Orders will appear here once they move into the pre-production stage</p>
           </div>
         )}
+        </>}
       </div>
 
       {costModalOrder && (

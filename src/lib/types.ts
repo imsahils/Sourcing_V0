@@ -21,6 +21,7 @@ export type NotificationType = 'overdue' | 'due-today' | 'completed' | 'info'
 export type Role =
   | 'sourcing-poc'
   | 'sourcing-manager'
+  | 'sourcing-director'
   | 'category-head'
   | 'vendor'
   | 'qa-manager'
@@ -102,6 +103,13 @@ export interface SubOrder {
 
   // History
   history: ActivityLog[]
+
+  // Vendor RFQ (vendor stage)
+  techPackUrl?: string
+  rfqStatus?: RFQStatus
+  vendorRFQs?: VendorRFQ[]
+  parentSubOrderId?: string
+  cancellationRequest?: CancellationRequest
 }
 
 // ─── Vendor ───────────────────────────────────────────────────────────────────
@@ -217,6 +225,79 @@ export interface QueueItem {
   daysOverdue?: number
   ctaLabel: string
   ctaRoute: string
+}
+
+// ─── Vendor RFQ ───────────────────────────────────────────────────────────────
+
+export type RFQStatus = 'not-started' | 'draft' | 'sent' | 'responded' | 'confirmed' | 'closed-no-vendor'
+export type VendorRFQStatus = 'sent' | 'responded' | 'declined' | 'accepted' | 'rejected' | 'expired' | 'revoked'
+
+export interface VendorRFQ {
+  id: string
+  subOrderId: string
+  vendor: Vendor
+  // Style brief snapshot at time of sending
+  styleCode: string
+  styleName: string
+  colour: string
+  orderQty: number
+  targetPrice: number
+  handoverDate: string
+  fabricQuality: string
+  category: string
+  sizeRatio: string
+  warehouseSplit: { warehouse: string; qty: number }[]
+  techPackUrl: string
+  notes?: string
+  // Lifecycle
+  status: VendorRFQStatus
+  sentAt: string
+  expiresAt: string
+  respondedAt?: string
+  closedAt?: string
+  // Vendor response
+  quotedPrice?: number
+  vendorPromisedDate?: string
+  leadTimeDays?: number
+  capacityQty?: number
+  declineReason?: string
+  // POC action
+  revokedReason?: string
+}
+
+// ─── Cancellation ─────────────────────────────────────────────────────────────
+
+export type CancelReason =
+  | 'DEMAND_DROP'
+  | 'DESIGN_CHANGE'
+  | 'BUDGET_CUT'
+  | 'STYLE_MERGED'
+  | 'VENDOR_FAILURE'
+  | 'QUALITY_MISMATCH'
+  | 'OTHER'
+
+export interface ApprovalEntry {
+  approverId?: string
+  approverName?: string
+  status: 'pending' | 'approved' | 'rejected'
+  actedAt?: string
+  note?: string
+}
+
+export interface CancellationRequest {
+  id: string
+  subOrderId: string
+  status: 'pending-approval' | 'approved' | 'rejected' | 'revised'
+  initiatedBy: { id: string; name: string; role: Role }
+  initiatedAt: string
+  reasonCode: CancelReason
+  reasonNote?: string
+  categoryHeadApproval: ApprovalEntry
+  sourcingDirectorApproval: ApprovalEntry
+  rejectedBy?: { id: string; name: string; role: Role }
+  rejectionReason?: string
+  revisions: { revisedAt: string; reasonCode: CancelReason; reasonNote?: string }[]
+  lastReminderSentAt?: string
 }
 
 // ─── Notification ─────────────────────────────────────────────────────────────

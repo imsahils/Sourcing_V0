@@ -7,7 +7,7 @@ import {
   CheckCircle2, X, Info, Send, FileText, RotateCcw, Check,
   Building2, MapPin, Star, AlertCircle, ChevronRight, Search,
   Calendar, Clock, FlaskConical, Package, Upload, ChevronLeft,
-  Layers, Factory, ScanLine, Truck, CalendarCheck, Eye,
+  Layers, Factory, ScanLine, Truck, CalendarCheck, Eye, Table2, LayoutGrid,
 } from 'lucide-react'
 import { Header } from '@/components/layout/Header'
 import { StatusBadge, OrderTypeBadge, TierBadge } from '@/components/shared/StatusBadge'
@@ -18,6 +18,7 @@ import { apiOrderToSubOrder } from '@/lib/api/adapters'
 import type { ApiVendor } from '@/lib/api/vendors'
 import { cn } from '@/lib/utils'
 import type { SubOrder, SubOrderStatus } from '@/lib/types'
+import { subOrders as mockSubOrders } from '@/lib/data'
 import { useCurrentUser } from '@/lib/user-context'
 import { SubOrderPanel } from '@/app/portfolio/[id]/SubOrderDetailClient'
 import {
@@ -29,6 +30,7 @@ import {
   INITIAL_PO_RECORDS, VENDOR_D365_CODES, getOTBLines, getWH, poTotalQty, poTotalValue, sizesFromLines,
   type PORecord,
 } from '@/lib/purchase-orders'
+import { TrackerView } from './TrackerView'
 
 // ─── Stage labels ─────────────────────────────────────────────────────────────
 
@@ -1015,6 +1017,9 @@ function PortfolioGridView() {
     [rawOrders, vendorMap, userMap],
   )
 
+  // ── Tracker view toggle ──────────────────────────────────────────────────────
+  const [trackerMode, setTrackerMode] = useState(false)
+
   // ── Drawer ───────────────────────────────────────────────────────────────────
   const [drawerOrder, setDrawerOrder] = useState<SubOrder | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
@@ -1426,11 +1431,37 @@ function PortfolioGridView() {
             )}
           </div>
 
+          {/* Tracker view toggle */}
+          <button
+            onClick={() => setTrackerMode(v => !v)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', borderRadius: 'var(--ds-radius-sm)',
+              border: `1px solid ${trackerMode ? 'var(--ds-primary)' : 'var(--ds-border)'}`,
+              background: trackerMode ? 'var(--ds-primary-light)' : 'var(--ds-surface)',
+              color: trackerMode ? 'var(--ds-primary-dark)' : 'var(--ds-text-secondary)',
+              fontSize: 12.5, fontWeight: 500, cursor: 'pointer', transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap',
+            }}
+            title={trackerMode ? 'Switch to Portfolio view' : 'Switch to Tracker view'}
+          >
+            {trackerMode
+              ? <><LayoutGrid style={{ width: 13, height: 13 }} /> Portfolio View</>
+              : <><Table2 style={{ width: 13, height: 13 }} /> Tracker View</>
+            }
+          </button>
+
           <button className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-xs">
             <Download className="w-3.5 h-3.5" /> Export DPR
           </button>
         </div>
       </div>
+
+      {/* ── Tracker View ───────────────────────────────────────────────────── */}
+      {trackerMode && <TrackerView orders={filtered} />}
+
+      {/* ── Portfolio View (mobile + desktop) ──────────────────────────────── */}
+      {!trackerMode && <>
 
       {/* ── Mobile card list ───────────────────────────────────────────────── */}
       <div className="md:hidden space-y-3">
@@ -1624,6 +1655,8 @@ function PortfolioGridView() {
           </table>
         </div>
       </div>
+
+      </>}
     </div>
   )
 }
@@ -1645,6 +1678,20 @@ type VendorAssignment = {
   vendorTargetDate?: string
 }
 
+// RFQ summary on the listing — lightweight view of `VendorRFQ` from /lib/types
+type RFQListItemStatus = 'sent' | 'responded' | 'declined' | 'accepted' | 'rejected' | 'expired' | 'revoked'
+type RFQListStatus     = 'not-started' | 'sent' | 'responded' | 'confirmed' | 'closed-no-vendor'
+
+type RFQLite = {
+  vendorId: string
+  vendorName: string
+  status: RFQListItemStatus
+  quotedPrice?: number
+  vendorPromisedDate?: string
+  capacityQty?: number
+  expiresAt?: string
+}
+
 type PendingAssignOrder = {
   id: string
   styleCode: string
@@ -1664,6 +1711,9 @@ type PendingAssignOrder = {
   tier: 'HERO' | 'TIER-1' | 'TIER-2' | 'TAIL'
   orderType: 'NEW' | 'REPLEN'
   assignments: VendorAssignment[]
+  rfqStatus?: RFQListStatus
+  rfqs?: RFQLite[]
+  techPackUrl?: string
 }
 
 type DraftEntry = {
@@ -1680,6 +1730,13 @@ const PENDING_ASSIGN_ORDERS: PendingAssignOrder[] = [
     orderQty: 500, targetPrice: 220, deliveryDays: 45, inwardDate: '2026-06-05',
     season: 'SS25', assignedDate: '2026-04-13', tier: 'TIER-2', orderType: 'NEW',
     assignments: [],
+    techPackUrl: 'https://drive.google.com/file/d/mock-tech-pack-NN416-089',
+    rfqStatus: 'sent',
+    rfqs: [
+      { vendorId: 'v_adt', vendorName: 'ADITEE INTERNATIONAL', status: 'sent', expiresAt: '2026-05-22' },
+      { vendorId: 'v_crv', vendorName: 'CAARVI TEXTILES',       status: 'sent', expiresAt: '2026-05-22' },
+      { vendorId: 'v_and', vendorName: 'AND DESIGN',            status: 'sent', expiresAt: '2026-05-22' },
+    ],
   },
   {
     id: 'NNKNTW250019', styleCode: 'NN419-201', styleName: 'Boys Printed Polo T-Shirt',
@@ -1687,6 +1744,13 @@ const PENDING_ASSIGN_ORDERS: PendingAssignOrder[] = [
     orderQty: 750, targetPrice: 175, deliveryDays: 40, inwardDate: '2026-06-10',
     season: 'SS25', assignedDate: '2026-04-13', tier: 'TIER-1', orderType: 'NEW',
     assignments: [],
+    techPackUrl: 'https://drive.google.com/file/d/mock-tech-pack-NN419-201',
+    rfqStatus: 'responded',
+    rfqs: [
+      { vendorId: 'v_adt', vendorName: 'ADITEE INTERNATIONAL', status: 'responded', quotedPrice: 168, vendorPromisedDate: '2026-08-12', capacityQty: 750, expiresAt: '2026-05-20' },
+      { vendorId: 'v_crv', vendorName: 'CAARVI TEXTILES',       status: 'sent',                                                                       expiresAt: '2026-05-20' },
+      { vendorId: 'v_and', vendorName: 'AND DESIGN',            status: 'declined' },
+    ],
   },
   {
     id: 'NNKNTW250020', styleCode: 'NN421-088', styleName: 'Girls Woven Pinafore Dress',
@@ -1898,19 +1962,78 @@ function daysLeft(dateStr: string) {
   return Math.ceil((d.getTime() - today.getTime()) / 86400000)
 }
 
+// ─── RFQ status display helpers (listing page) ────────────────────────────────
+
+const RFQ_LIST_STATUS_LABEL: Record<RFQListStatus, string> = {
+  'not-started':      'Not Started',
+  'sent':             'RFQs Sent',
+  'responded':        'Quotes Received',
+  'confirmed':        'Vendor Confirmed',
+  'closed-no-vendor': 'Closed — No Vendor',
+}
+
+const RFQ_LIST_STATUS_STYLE: Record<RFQListStatus, string> = {
+  'not-started':      'bg-slate-100 text-slate-600 border-slate-200',
+  'sent':             'bg-violet-100 text-violet-700 border-violet-200',
+  'responded':        'bg-amber-100 text-amber-800 border-amber-200',
+  'confirmed':        'bg-green-100 text-green-700 border-green-200',
+  'closed-no-vendor': 'bg-slate-200 text-slate-600 border-slate-300',
+}
+
+function rfqSummaryCounts(rfqs: RFQLite[] | undefined) {
+  const sent       = rfqs?.filter(r => r.status === 'sent').length          ?? 0
+  const responded  = rfqs?.filter(r => r.status === 'responded').length     ?? 0
+  const declined   = rfqs?.filter(r => r.status === 'declined' || r.status === 'expired' || r.status === 'revoked').length ?? 0
+  const accepted   = rfqs?.filter(r => r.status === 'accepted').length      ?? 0
+  const total      = rfqs?.length ?? 0
+  return { sent, responded, declined, accepted, total }
+}
+
+function bestQuote(rfqs: RFQLite[] | undefined) {
+  const quoted = (rfqs ?? []).filter(r => r.status === 'responded' && typeof r.quotedPrice === 'number')
+  if (quoted.length === 0) return null
+  return quoted.reduce((b, r) => (r.quotedPrice! < b.quotedPrice! ? r : b))
+}
+
 function VendorAssignView() {
   const { data: vendors } = useVendors()
+  const router = useRouter()
 
   const defaultDue = () => {
     const d = new Date(); d.setDate(d.getDate() + 5)
     return d.toISOString().split('T')[0]
   }
 
+  // ── RFQ Drawer (right-side panel) ──────────────────────────────────────────
+  const [drawerOrder, setDrawerOrder] = useState<SubOrder | null>(null)
+  const [drawerVisible, setDrawerVisible] = useState(false)
+
+  const openRFQDrawer = useCallback((id: string) => {
+    const found = mockSubOrders.find(s => s.id === id)
+    if (!found) return
+    setDrawerOrder(found)
+    setDrawerVisible(true)
+    document.body.style.overflow = 'hidden'
+  }, [])
+
+  const closeDrawer = useCallback(() => {
+    setDrawerVisible(false)
+    document.body.style.overflow = ''
+    setTimeout(() => setDrawerOrder(null), 300)
+  }, [])
+
+  useEffect(() => () => { document.body.style.overflow = '' }, [])
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeDrawer() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [closeDrawer])
+
   const [orders, setOrders]           = useState<PendingAssignOrder[]>(PENDING_ASSIGN_ORDERS)
   const [selected, setSelected]       = useState<Set<string>>(new Set())
   const [draft, setDraft]             = useState<Record<string, DraftEntry>>({})
   const [search, setSearch]           = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all'|'unassigned'|'staged'|'assigned'>('all')
+  const [filterStatus, setFilterStatus] = useState<'all'|'unassigned'|'staged'|'assigned'|'rfq-sent'|'rfq-responded'>('all')
   const [filterCategory, setFilterCategory] = useState('All')
   const [filterSubType,  setFilterSubType]  = useState('All')
   const [filterGender,   setFilterGender]   = useState('All')
@@ -1968,6 +2091,18 @@ function VendorAssignView() {
   }
 
   const sheetOrders = assignSheetIds.map(id => orders.find(o => o.id === id)).filter(Boolean) as PendingAssignOrder[]
+  // Active orders per vendor (stage not yet 'grn') — surfaces capacity context in the picker
+  const sheetVendorWorkload = new Map<string, { activeOrders: number; pipelineQty: number; sameCategory: number }>()
+  const sheetCategoryHint    = sheetOrders.length === 1 ? sheetOrders[0].category : null
+  for (const so of mockSubOrders) {
+    if (!so.vendor?.id || so.vendor.id === 'v_tba') continue
+    if (so.currentStage === 'grn') continue
+    const prev = sheetVendorWorkload.get(so.vendor.id) ?? { activeOrders: 0, pipelineQty: 0, sameCategory: 0 }
+    prev.activeOrders += 1
+    prev.pipelineQty  += so.orderQty
+    if (sheetCategoryHint && so.category === sheetCategoryHint) prev.sameCategory += 1
+    sheetVendorWorkload.set(so.vendor.id, prev)
+  }
   const sheetFilteredVendors = vendors.filter(v =>
     v.name.toLowerCase().includes(sheetVendorSearch.toLowerCase()) ||
     (v.location ?? '').toLowerCase().includes(sheetVendorSearch.toLowerCase())
@@ -1993,9 +2128,11 @@ function VendorAssignView() {
       o.id.toLowerCase().includes(q) ||
       o.colour.toLowerCase().includes(q)
     )
-    if (filterStatus === 'unassigned') list = list.filter(o => o.assignments.length === 0 && !draft[o.id])
+    if (filterStatus === 'unassigned') list = list.filter(o => o.assignments.length === 0 && !draft[o.id] && (!o.rfqStatus || o.rfqStatus === 'not-started'))
     if (filterStatus === 'staged')     list = list.filter(o => !!draft[o.id])
     if (filterStatus === 'assigned')   list = list.filter(o => o.assignments.length > 0 && !draft[o.id])
+    if (filterStatus === 'rfq-sent')      list = list.filter(o => o.rfqStatus === 'sent')
+    if (filterStatus === 'rfq-responded') list = list.filter(o => o.rfqStatus === 'responded')
     if (filterCategory !== 'All') list = list.filter(o => o.category === filterCategory)
     if (filterSubType  !== 'All') list = list.filter(o => o.subType  === filterSubType)
     if (filterGender   !== 'All') list = list.filter(o => o.gender   === filterGender)
@@ -2087,25 +2224,50 @@ function VendorAssignView() {
   const selCount    = selected.size
   const selOrders   = Array.from(selected)
 
-  const unassigned  = orders.filter(o => o.assignments.length === 0 && !draft[o.id]).length
+  const unassigned  = orders.filter(o => o.assignments.length === 0 && !draft[o.id] && (!o.rfqStatus || o.rfqStatus === 'not-started')).length
   const stagedCount = Object.keys(draft).length
   const assignedCount = orders.filter(o => o.assignments.length > 0).length
+  const rfqSentCount      = orders.filter(o => o.rfqStatus === 'sent').length
+  const rfqRespondedCount = orders.filter(o => o.rfqStatus === 'responded').length
 
   const onBehalfOrder = onBehalfModal ? orders.find(o => o.id === onBehalfModal.orderId) : null
 
   return (
     <div className="px-4 md:px-6 py-6 pb-24">
 
+      {/* ── RFQ Right Drawer ────────────────────────────────────────────────── */}
+      {drawerOrder && (
+        <>
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/30 z-40 transition-opacity duration-300',
+              drawerVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            )}
+            onClick={closeDrawer}
+          />
+          <div
+            className={cn(
+              'fixed top-0 right-0 h-full w-full md:w-[780px] md:max-w-[90vw] bg-white shadow-2xl z-50',
+              'flex flex-col transition-transform duration-300 ease-out',
+              drawerVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
+          >
+            <SubOrderPanel order={drawerOrder} onClose={closeDrawer} initialTab="vendor-assign" />
+          </div>
+        </>
+      )}
+
       {/* ── Summary cards ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
         {[
-          { label: 'Pending Assignment', value: unassigned,    color: 'amber', filter: 'unassigned' as const },
-          { label: 'Staged (unsaved)',   value: stagedCount,   color: 'blue',  filter: 'staged' as const },
-          { label: 'Assigned',           value: assignedCount, color: 'green', filter: 'assigned' as const },
-          { label: 'Total Styles',       value: orders.length, color: 'slate', filter: 'all' as const },
+          { label: 'Pending RFQ',        value: unassigned,         color: 'amber',  filter: 'unassigned'    as const },
+          { label: 'RFQs Sent',          value: rfqSentCount,       color: 'violet', filter: 'rfq-sent'      as const },
+          { label: 'Quotes Received',    value: rfqRespondedCount,  color: 'orange', filter: 'rfq-responded' as const },
+          { label: 'Confirmed',          value: assignedCount,      color: 'green',  filter: 'assigned'      as const },
+          { label: 'Total Styles',       value: orders.length,      color: 'slate',  filter: 'all'           as const },
         ].map(({ label, value, color, filter }) => {
-          const bg   = { amber:'bg-amber-50 border-amber-200', blue:'bg-violet-50 border-violet-200', green:'bg-green-50 border-green-200', slate:'bg-slate-50 border-slate-200' }[color]
-          const txt  = { amber:'text-amber-700', blue:'text-violet-700', green:'text-green-700', slate:'text-slate-700' }[color]
+          const bg   = { amber:'bg-amber-50 border-amber-200', violet:'bg-violet-50 border-violet-200', orange:'bg-orange-50 border-orange-200', green:'bg-green-50 border-green-200', slate:'bg-slate-50 border-slate-200' }[color]
+          const txt  = { amber:'text-amber-700', violet:'text-violet-700', orange:'text-orange-700', green:'text-green-700', slate:'text-slate-700' }[color]
           return (
             <button key={label} onClick={() => setFilterStatus(filterStatus === filter ? 'all' : filter)}
               className={cn('rounded-xl border p-3 md:p-4 text-left transition-all hover:shadow-sm', bg,
@@ -2291,6 +2453,30 @@ function VendorAssignView() {
                         <button onClick={() => discardDraft(order.id)}
                           className="text-xs text-slate-400 hover:text-red-500 underline">discard</button>
                       </div>
+                    ) : order.rfqStatus && order.rfqStatus !== 'not-started' ? (
+                      (() => {
+                        const c = rfqSummaryCounts(order.rfqs)
+                        const best = bestQuote(order.rfqs)
+                        return (
+                          <div className="space-y-1.5">
+                            <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full border', RFQ_LIST_STATUS_STYLE[order.rfqStatus])}>
+                              <Send className="w-2.5 h-2.5" />
+                              {RFQ_LIST_STATUS_LABEL[order.rfqStatus]}
+                            </span>
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                              <span className="font-semibold text-slate-700">{c.total} sent</span>
+                              {c.responded > 0 && <span className="text-amber-700">· {c.responded} responded</span>}
+                              {c.declined  > 0 && <span className="text-slate-400">· {c.declined} declined</span>}
+                            </div>
+                            {best && (
+                              <p className="text-[11px] text-slate-600">
+                                Best: <span className="font-bold text-green-700">₹{best.quotedPrice}</span>
+                                <span className="text-slate-400"> · {best.vendorName.split(' ')[0]}</span>
+                              </p>
+                            )}
+                          </div>
+                        )
+                      })()
                     ) : order.assignments.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
                         {order.assignments.map(a => (
@@ -2311,16 +2497,25 @@ function VendorAssignView() {
                   {/* Action */}
                   <td className="px-4 py-3">
                     {!isDraft && (
-                      <button onClick={() => openSheet([order.id])}
-                        className={cn(
-                          'flex items-center gap-1 text-xs font-medium whitespace-nowrap transition-colors',
-                          order.assignments.length === 0
-                            ? 'text-violet-600 hover:text-violet-800'
-                            : 'text-slate-400 hover:text-slate-600'
-                        )}>
-                        <Building2 className="w-3 h-3" />
-                        {order.assignments.length === 0 ? 'Assign' : 'Re-assign'}
-                      </button>
+                      order.rfqStatus && order.rfqStatus !== 'not-started' ? (
+                        <button
+                          onClick={() => openRFQDrawer(order.id)}
+                          className="flex items-center gap-1 text-xs font-semibold text-violet-600 hover:text-violet-800 whitespace-nowrap"
+                        >
+                          View RFQs <ChevronRight className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <button onClick={() => openSheet([order.id])}
+                          className={cn(
+                            'flex items-center gap-1 text-xs font-medium whitespace-nowrap transition-colors',
+                            order.assignments.length === 0
+                              ? 'text-violet-600 hover:text-violet-800'
+                              : 'text-slate-400 hover:text-slate-600'
+                          )}>
+                          <Building2 className="w-3 h-3" />
+                          {order.assignments.length === 0 ? 'Send RFQ' : 'Re-assign'}
+                        </button>
+                      )
                     )}
                   </td>
                 </tr>
@@ -2441,6 +2636,38 @@ function VendorAssignView() {
                       Costing due {new Date(dEntry.costingDueDate).toLocaleDateString('en-IN', { day:'numeric', month:'short' })}
                     </p>
                   </div>
+                ) : order.rfqStatus && order.rfqStatus !== 'not-started' ? (
+                  (() => {
+                    const c = rfqSummaryCounts(order.rfqs)
+                    const best = bestQuote(order.rfqs)
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full border', RFQ_LIST_STATUS_STYLE[order.rfqStatus!])}>
+                            <Send className="w-2.5 h-2.5" />
+                            {RFQ_LIST_STATUS_LABEL[order.rfqStatus!]}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            {c.total} sent
+                            {c.responded > 0 && <span className="text-amber-700"> · {c.responded} responded</span>}
+                            {c.declined  > 0 && <span className="text-slate-400"> · {c.declined} declined</span>}
+                          </span>
+                        </div>
+                        {best && (
+                          <p className="text-[11px] text-slate-600 mb-2">
+                            Best quote: <span className="font-bold text-green-700">₹{best.quotedPrice}</span>
+                            <span className="text-slate-400"> · {best.vendorName}</span>
+                          </p>
+                        )}
+                        <button
+                          onClick={() => openRFQDrawer(order.id)}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm"
+                        >
+                          <Send className="w-4 h-4" /> View RFQ Tracker
+                        </button>
+                      </div>
+                    )
+                  })()
                 ) : order.assignments.length > 0 ? (
                   <div>
                     <div className="flex flex-wrap gap-1 mb-2">
@@ -2466,7 +2693,7 @@ function VendorAssignView() {
                     onClick={() => openSheet([order.id])}
                     className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 active:bg-violet-800 transition-colors shadow-sm"
                   >
-                    <Building2 className="w-4 h-4" /> Assign Vendor
+                    <Building2 className="w-4 h-4" /> Send RFQ
                   </button>
                 )}
               </div>
@@ -2629,20 +2856,38 @@ function VendorAssignView() {
                     const sel  = sheetVendorIds.includes(v.id)
                     const otif = v.otifScore ?? 0
                     const fi   = v.fiPassRate ?? 0
+                    const wl   = sheetVendorWorkload.get(v.id) ?? { activeOrders: 0, pipelineQty: 0, sameCategory: 0 }
                     const otifColor = otif >= 75 ? 'text-green-700 bg-green-50' : otif >= 60 ? 'text-amber-700 bg-amber-50' : 'text-red-700 bg-red-50'
                     const fiColor   = fi   >= 85 ? 'text-green-700 bg-green-50' : fi   >= 70 ? 'text-amber-700 bg-amber-50' : 'text-red-700 bg-red-50'
+                    const loadColor = wl.activeOrders >= 8 ? 'bg-red-50 border-red-200 text-red-700' :
+                                      wl.activeOrders >= 4 ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                                      'bg-green-50 border-green-200 text-green-700'
                     return (
                       <button
                         key={v.id}
                         onClick={() => setSheetVendorIds(p => p.includes(v.id) ? p.filter(x => x !== v.id) : [...p, v.id])}
-                        className={cn('w-full flex items-center gap-3 px-4 py-3 text-left transition-colors', sel ? 'bg-violet-50' : 'bg-white hover:bg-slate-50')}
+                        className={cn('w-full flex items-start gap-3 px-4 py-3 text-left transition-colors', sel ? 'bg-violet-50' : 'bg-white hover:bg-slate-50')}
                       >
-                        <div className={cn('w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0', sel ? 'bg-violet-600 border-violet-600' : 'border-slate-300 bg-white')}>
+                        <div className={cn('w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5', sel ? 'bg-violet-600 border-violet-600' : 'border-slate-300 bg-white')}>
                           {sel && <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className={cn('text-sm font-semibold leading-tight', sel ? 'text-violet-900' : 'text-slate-800')}>{v.name}</p>
                           <p className="text-xs text-slate-400">{v.location} · <span className="font-mono text-[10px]">{v.id}</span></p>
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border', loadColor)}>
+                              <Package className="w-2 h-2" />
+                              {wl.activeOrders} active
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {wl.pipelineQty.toLocaleString()} pcs in pipeline
+                            </span>
+                            {wl.sameCategory > 0 && sheetCategoryHint && (
+                              <span className="text-[10px] text-violet-600 font-medium">
+                                · {wl.sameCategory} {sheetCategoryHint}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <span className={cn('text-xs font-semibold px-2 py-0.5 rounded-full', otifColor)}>OTIF {otif}%</span>

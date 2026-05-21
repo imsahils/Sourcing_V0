@@ -1,20 +1,21 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   AlertTriangle, ArrowLeft, Calendar, Package, TrendingUp,
   CheckCircle2, Clock, AlertCircle, FileText, ChevronRight,
   MapPin, Phone, Mail, BarChart3, Layers, Edit3,
   Plus, ExternalLink, User, Truck, ClipboardCheck,
-  Building2, X, Info, Send, RotateCcw, Eye, ChevronDown, Upload,
+  Building2, X, Info, Send, RotateCcw, Eye, ChevronDown, Upload, Search,
 } from 'lucide-react'
 import { Header } from '@/components/layout/Header'
 import { ProgressStrip } from '@/components/suborder/ProgressStrip'
 import { StatusBadge, PreProdStageBadge, FIStatusBadge, OrderTypeBadge, TierBadge } from '@/components/shared/StatusBadge'
 import { useSubOrder } from '@/lib/hooks/useSubOrders'
-import { apiOrderToSubOrder } from '@/lib/api/adapters'
+
 import { cn } from '@/lib/utils'
-import type { SubOrder, PreProdStage, FIRequest, ActivityLog, SampleRecord, SampleType, SampleStatus } from '@/lib/types'
+import type { SubOrder, PreProdStage, FIRequest, ActivityLog, SampleRecord, SampleType, SampleStatus, VendorRFQ, VendorRFQStatus } from '@/lib/types'
+import { vendors, subOrders as allSubOrders } from '@/lib/data'
 
 // ─── Production Update Modal ─────────────────────────────────────────────────
 
@@ -2012,9 +2013,633 @@ function HistoryTab({ order }: { order: SubOrder }) {
   )
 }
 
+// ─── Vendor Assign Tab ────────────────────────────────────────────────────────
+
+const RFQ_STATUS_LABELS: Record<VendorRFQStatus, string> = {
+  sent:      'Awaiting Response',
+  responded: 'Quote Received',
+  declined:  'Declined',
+  accepted:  'Confirmed',
+  rejected:  'Rejected',
+  expired:   'Expired',
+  revoked:   'Revoked',
+}
+
+const RFQ_STATUS_STYLES: Record<VendorRFQStatus, string> = {
+  sent:      'bg-blue-50 text-blue-700 border-blue-200',
+  responded: 'bg-violet-50 text-violet-700 border-violet-200',
+  declined:  'bg-red-50 text-red-600 border-red-200',
+  accepted:  'bg-green-50 text-green-700 border-green-200',
+  rejected:  'bg-slate-100 text-slate-500 border-slate-200',
+  expired:   'bg-slate-100 text-slate-500 border-slate-200',
+  revoked:   'bg-orange-50 text-orange-600 border-orange-200',
+}
+
+function daysUntil(dateStr: string) {
+  const today = new Date(); today.setHours(0,0,0,0)
+  const d = new Date(dateStr); d.setHours(0,0,0,0)
+  return Math.ceil((d.getTime() - today.getTime()) / 86400000)
+}
+
+// ─── Vendor Discovery Modal ───────────────────────────────────────────────────
+
+function VendorDiscoveryModal({
+  order,
+  onClose,
+  onSendRFQ,
+}: {
+  order: SubOrder
+  onClose: () => void
+  onSendRFQ: (selectedVendors: typeof vendors) => void
+}) {
+  const [search, setSearch]         = useState('')
+  const [tierFilter, setTierFilter] = useState<string>('all')
+  const [selected, setSelected]     = useState<Set<string>>(new Set())
+
+  const alreadySentIds = new Set((order.vendorRFQs ?? []).map(r => r.vendor.id))
+
+  // Per-vendor workload: count active orders (stage not 'grn') and total pipeline qty
+  const vendorWorkload = new Map<string, { activeOrders: number; pipelineQty: number; sameCategory: number }>()
+  for (const so of allSubOrders) {
+    if (!so.vendor?.id || so.vendor.id === 'v_tba') continue
+    if (so.currentStage === 'grn') continue
+    const prev = vendorWorkload.get(so.vendor.id) ?? { activeOrders: 0, pipelineQty: 0, sameCategory: 0 }
+    prev.activeOrders += 1
+    prev.pipelineQty  += so.orderQty
+    if (so.category === order.category) prev.sameCategory += 1
+    vendorWorkload.set(so.vendor.id, prev)
+  }
+
+  const filtered = vendors.filter(v => {
+    if (alreadySentIds.has(v.id)) return false
+    if (tierFilter !== 'all' && v.tier !== tierFilter) return false
+    const q = search.toLowerCase()
+    return v.name.toLowerCase().includes(q) || v.location.toLowerCase().includes(q)
+  })
+
+  const toggle = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const handleSend = () => {
+    const chosen = vendors.filter(v => selected.has(v.id))
+    onSendRFQ(chosen)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h3 className="font-semibold text-slate-900">Select Vendors — Send RFQ</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{order.styleName} · {order.colour} · {order.orderQty} pcs</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Filters */}
+        <div className="px-6 py-3 border-b border-slate-100 flex items-center gap-3 flex-shrink-0">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search vendors..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+            />
+          </div>
+          <div className="flex gap-1.5">
+            {['all','Tier 1','Tier 2','Tier 3'].map(t => (
+              <button
+                key={t}
+                onClick={() => setTierFilter(t)}
+                className={cn('px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                  tierFilter === t ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'
+                )}
+              >
+                {t === 'all' ? 'All Tiers' : t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Vendor list */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+          {filtered.length === 0 ? (
+            <div className="text-center py-10 text-slate-400">
+              <Package className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              <p className="text-sm">No vendors match your filters</p>
+            </div>
+          ) : (
+            filtered.map(v => {
+              const isSelected = selected.has(v.id)
+              const wl         = vendorWorkload.get(v.id) ?? { activeOrders: 0, pipelineQty: 0, sameCategory: 0 }
+              const loadColor  = wl.activeOrders >= 8 ? 'text-red-600' : wl.activeOrders >= 4 ? 'text-amber-600' : 'text-green-600'
+              return (
+                <button
+                  key={v.id}
+                  onClick={() => toggle(v.id)}
+                  className={cn(
+                    'w-full text-left rounded-xl border p-4 transition-all',
+                    isSelected
+                      ? 'border-violet-400 bg-violet-50 ring-1 ring-violet-300'
+                      : 'border-slate-200 hover:border-violet-300 hover:bg-slate-50'
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={cn('w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors',
+                      isSelected ? 'bg-violet-600 border-violet-600' : 'border-slate-300'
+                    )}>
+                      {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm text-slate-900">{v.name}</span>
+                        {v.tier && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">{v.tier}</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                        <MapPin className="w-3 h-3" />{v.location}
+                      </p>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <span className={cn('inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border',
+                          wl.activeOrders >= 8 ? 'bg-red-50 border-red-200 text-red-700' :
+                          wl.activeOrders >= 4 ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                          'bg-green-50 border-green-200 text-green-700'
+                        )}>
+                          <Package className="w-2.5 h-2.5" />
+                          {wl.activeOrders} active
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {wl.pipelineQty.toLocaleString()} pcs in pipeline
+                        </span>
+                        {wl.sameCategory > 0 && (
+                          <span className="text-[11px] text-violet-600 font-medium">
+                            · {wl.sameCategory} {order.category}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-3 flex-shrink-0">
+                      <div className="text-center">
+                        <p className={cn('text-sm font-bold', (v.otifScore ?? 0) >= 75 ? 'text-green-600' : (v.otifScore ?? 0) >= 60 ? 'text-amber-600' : 'text-red-600')}>
+                          {v.otifScore ?? '—'}%
+                        </p>
+                        <p className="text-xs text-slate-400">OTIF</p>
+                      </div>
+                      <div className="text-center">
+                        <p className={cn('text-sm font-bold', (v.fiPassRate ?? 0) >= 85 ? 'text-green-600' : (v.fiPassRate ?? 0) >= 70 ? 'text-amber-600' : 'text-red-600')}>
+                          {v.fiPassRate ?? '—'}%
+                        </p>
+                        <p className="text-xs text-slate-400">FI Pass</p>
+                      </div>
+                      <div className="text-center">
+                        <p className={cn('text-sm font-bold', loadColor)}>
+                          {wl.activeOrders}
+                        </p>
+                        <p className="text-xs text-slate-400">Load</p>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              )
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between flex-shrink-0">
+          <p className="text-xs text-slate-500">
+            {selected.size > 0 ? `${selected.size} vendor${selected.size > 1 ? 's' : ''} selected` : 'Select vendors to send RFQ'}
+          </p>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
+            <button
+              onClick={handleSend}
+              disabled={selected.size === 0}
+              className="px-4 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Preview RFQ ({selected.size})
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RFQ Preview Modal ────────────────────────────────────────────────────────
+
+function RFQPreviewModal({
+  order,
+  selectedVendors,
+  onClose,
+  onConfirm,
+}: {
+  order: SubOrder
+  selectedVendors: typeof vendors
+  onClose: () => void
+  onConfirm: (notes: string, expiryDays: number) => void
+}) {
+  const [notes, setNotes]           = useState('')
+  const [expiryDays, setExpiryDays] = useState(7)
+  const [sending, setSending]       = useState(false)
+  const [sent, setSent]             = useState(false)
+
+  const expiryDate = new Date()
+  expiryDate.setDate(expiryDate.getDate() + expiryDays)
+
+  const handleConfirm = () => {
+    setSending(true)
+    setTimeout(() => {
+      setSent(true)
+      setTimeout(() => onConfirm(notes, expiryDays), 1200)
+    }, 800)
+  }
+
+  if (sent) {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-8 text-center shadow-xl max-w-sm w-full">
+          <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+            <CheckCircle2 className="w-6 h-6 text-green-600" />
+          </div>
+          <p className="font-semibold text-slate-900 text-lg">RFQ Sent!</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Sent to {selectedVendors.length} vendor{selectedVendors.length > 1 ? 's' : ''}. Expires {expiryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <h3 className="font-semibold text-slate-900">RFQ Preview</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Sending to */}
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sending to</p>
+            <div className="flex flex-wrap gap-2">
+              {selectedVendors.map(v => (
+                <span key={v.id} className="text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-medium">
+                  {v.name}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Style brief */}
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-3">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Style Brief</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+              {[
+                ['Style Code',    order.styleCode],
+                ['Style Name',    order.styleName],
+                ['Colour',        order.colour],
+                ['Category',      order.category],
+                ['Fabric',        order.fabricQuality],
+                ['Order Qty',     `${order.orderQty} pcs`],
+                ['Target Price',  `₹${order.targetPrice} / pc`],
+                ['Handover Date', new Date(order.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <p className="text-xs text-slate-400">{label}</p>
+                  <p className="text-sm font-medium text-slate-800">{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tech pack */}
+          <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+              <FileText className="w-4 h-4 text-blue-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-800 truncate">Tech Pack — {order.styleCode}</p>
+              <p className="text-xs text-slate-400">Attached to this RFQ</p>
+            </div>
+            {order.techPackUrl ? (
+              <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Linked</span>
+            ) : (
+              <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Missing</span>
+            )}
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Notes to vendor</label>
+            <textarea
+              rows={3}
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="E.g. Ensure floral print is centered. Refer tech pack page 4 for placement..."
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+            />
+          </div>
+
+          {/* Expiry */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">RFQ expires in</label>
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1.5">
+                {[3,5,7,10,14].map(d => (
+                  <button
+                    key={d}
+                    onClick={() => setExpiryDays(d)}
+                    className={cn('w-10 h-10 rounded-lg text-sm font-medium border transition-colors',
+                      expiryDays === d ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'
+                    )}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400">
+                Expires {expiryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center justify-between flex-shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Back</button>
+          <button
+            onClick={handleConfirm}
+            disabled={sending || !order.techPackUrl}
+            className="px-5 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-40 flex items-center gap-1.5"
+          >
+            {sending ? (
+              <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Sending...</>
+            ) : (
+              <><Send className="w-3.5 h-3.5" />Send RFQ to {selectedVendors.length} vendor{selectedVendors.length > 1 ? 's' : ''}</>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Vendor Assign Tab ────────────────────────────────────────────────────────
+
+function VendorAssignTab({ order }: { order: SubOrder }) {
+  const [showDiscovery, setShowDiscovery] = useState(false)
+  const [showPreview, setShowPreview]     = useState(false)
+  const [selectedVendors, setSelectedVendors] = useState<typeof vendors>([])
+  const [rfqs, setRfqs]                   = useState<VendorRFQ[]>(order.vendorRFQs ?? [])
+  const [confirmingId, setConfirmingId]   = useState<string | null>(null)
+
+  const responded   = rfqs.filter(r => r.status === 'responded')
+  const sent        = rfqs.filter(r => r.status === 'sent')
+  const declined    = rfqs.filter(r => r.status === 'declined' || r.status === 'expired' || r.status === 'revoked')
+  const isConfirmed = rfqs.some(r => r.status === 'accepted')
+  const confirmedRFQ = rfqs.find(r => r.status === 'accepted')
+
+  const handleSelectVendors = (v: typeof vendors) => {
+    setSelectedVendors(v)
+    setShowDiscovery(false)
+    setShowPreview(true)
+  }
+
+  const handleConfirmSend = (_notes: string, _expiryDays: number) => {
+    const expiry = new Date()
+    expiry.setDate(expiry.getDate() + _expiryDays)
+    const newRFQs: VendorRFQ[] = selectedVendors.map((v, i) => ({
+      id: `rfq-new-${Date.now()}-${i}`,
+      subOrderId: order.id,
+      vendor: v,
+      styleCode: order.styleCode,
+      styleName: order.styleName,
+      colour: order.colour,
+      orderQty: order.orderQty,
+      targetPrice: order.targetPrice,
+      handoverDate: order.handoverDate,
+      fabricQuality: order.fabricQuality,
+      category: order.category,
+      sizeRatio: '1:2:2:1',
+      warehouseSplit: [],
+      techPackUrl: order.techPackUrl ?? '',
+      notes: _notes,
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+      expiresAt: expiry.toISOString(),
+    }))
+    setRfqs(prev => [...prev, ...newRFQs])
+    setShowPreview(false)
+  }
+
+  const handleRevoke = (rfqId: string) => {
+    setRfqs(prev => prev.map(r => r.id === rfqId ? { ...r, status: 'revoked' as VendorRFQStatus } : r))
+  }
+
+  const handleAccept = (rfqId: string) => {
+    setConfirmingId(rfqId)
+    setTimeout(() => {
+      setRfqs(prev => prev.map(r => ({
+        ...r,
+        status: r.id === rfqId ? 'accepted' : (r.status === 'sent' || r.status === 'responded') ? 'rejected' : r.status,
+      } as VendorRFQ)))
+      setConfirmingId(null)
+    }, 800)
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Status summary */}
+      {isConfirmed && confirmedRFQ ? (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-green-800">Vendor Confirmed — {confirmedRFQ.vendor.name}</p>
+            <p className="text-xs text-green-700 mt-0.5">
+              ₹{confirmedRFQ.quotedPrice}/pc · Promised {confirmedRFQ.vendorPromisedDate
+                ? new Date(confirmedRFQ.vendorPromisedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                : '—'}
+            </p>
+          </div>
+        </div>
+      ) : rfqs.length > 0 ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          {responded.length > 0 && (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200 font-medium">
+              {responded.length} Quote{responded.length > 1 ? 's' : ''} Received
+            </span>
+          )}
+          {sent.length > 0 && (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium">
+              {sent.length} Awaiting Response
+            </span>
+          )}
+          {declined.length > 0 && (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 border border-red-200 font-medium">
+              {declined.length} Declined / Revoked
+            </span>
+          )}
+          {rfqs[0]?.expiresAt && (
+            <span className={cn('text-xs px-2.5 py-1 rounded-full border font-medium flex items-center gap-1',
+              daysUntil(rfqs[0].expiresAt) <= 2
+                ? 'bg-red-50 text-red-600 border-red-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            )}>
+              <Clock className="w-3 h-3" />
+              {daysUntil(rfqs[0].expiresAt) > 0
+                ? `Expires in ${daysUntil(rfqs[0].expiresAt)}d`
+                : 'Expired'}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-6 text-center">
+          <Send className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+          <p className="text-sm font-medium text-slate-600">No RFQs sent yet</p>
+          <p className="text-xs text-slate-400 mt-0.5">Select vendors and send an RFQ to start the vendor selection process</p>
+        </div>
+      )}
+
+      {/* RFQ Tracker */}
+      {rfqs.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">RFQ Tracker</h4>
+            <span className="text-xs text-slate-400">{rfqs.length} sent</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {rfqs.map(rfq => (
+              <div key={rfq.id} className="px-4 py-3.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-slate-900">{rfq.vendor.name}</p>
+                      <span className={cn('text-xs px-2 py-0.5 rounded-full border font-medium', RFQ_STATUS_STYLES[rfq.status])}>
+                        {RFQ_STATUS_LABELS[rfq.status]}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3 h-3" />{rfq.vendor.location}
+                      {rfq.sentAt && <span className="ml-2">· Sent {new Date(rfq.sentAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                      {rfq.expiresAt && rfq.status === 'sent' && (
+                        <span className={cn('ml-1', daysUntil(rfq.expiresAt) <= 2 ? 'text-red-500 font-medium' : '')}>
+                          · Expires {new Date(rfq.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {rfq.status === 'sent' && (
+                      <button
+                        onClick={() => handleRevoke(rfq.id)}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                    {rfq.status === 'responded' && (
+                      <button
+                        onClick={() => handleAccept(rfq.id)}
+                        disabled={confirmingId === rfq.id}
+                        className="text-xs px-2.5 py-1 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-60 flex items-center gap-1 transition-colors"
+                      >
+                        {confirmingId === rfq.id
+                          ? <><div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />Confirming</>
+                          : 'Accept'
+                        }
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Quote details */}
+                {rfq.status === 'responded' && rfq.quotedPrice !== undefined && (
+                  <div className="mt-2.5 grid grid-cols-3 gap-3 bg-violet-50 rounded-lg p-2.5 border border-violet-100">
+                    <div>
+                      <p className="text-xs text-slate-400">Quoted Price</p>
+                      <p className="text-sm font-semibold text-slate-900">₹{rfq.quotedPrice}<span className="text-xs font-normal text-slate-400">/pc</span></p>
+                      <p className={cn('text-xs font-medium', rfq.quotedPrice <= order.targetPrice ? 'text-green-600' : 'text-red-500')}>
+                        {rfq.quotedPrice <= order.targetPrice
+                          ? `₹${order.targetPrice - rfq.quotedPrice} below target`
+                          : `₹${rfq.quotedPrice - order.targetPrice} above target`}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Promised Date</p>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {rfq.vendorPromisedDate ? new Date(rfq.vendorPromisedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Capacity</p>
+                      <p className="text-sm font-semibold text-slate-900">{rfq.capacityQty ?? order.orderQty} pcs</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Decline reason */}
+                {rfq.status === 'declined' && rfq.declineReason && (
+                  <p className="mt-1.5 text-xs text-red-500 bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-100">
+                    {rfq.declineReason}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Send RFQ CTA */}
+      {!isConfirmed && (
+        <button
+          onClick={() => setShowDiscovery(true)}
+          className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium text-violet-700 border border-violet-200 rounded-xl hover:bg-violet-50 transition-colors"
+        >
+          <Send className="w-3.5 h-3.5" />
+          {rfqs.length > 0 ? 'Send to More Vendors' : 'Select Vendors & Send RFQ'}
+        </button>
+      )}
+
+      {/* Modals */}
+      {showDiscovery && (
+        <VendorDiscoveryModal
+          order={order}
+          onClose={() => setShowDiscovery(false)}
+          onSendRFQ={handleSelectVendors}
+        />
+      )}
+      {showPreview && (
+        <RFQPreviewModal
+          order={order}
+          selectedVendors={selectedVendors}
+          onClose={() => { setShowPreview(false); setShowDiscovery(true) }}
+          onConfirm={handleConfirmSend}
+        />
+      )}
+    </div>
+  )
+}
+
 // ─── Shared panel content (used in both drawer and standalone page) ───────────
 
-type TabKey = 'overview' | 'costing' | 'pre-prod' | 'production' | 'samples' | 'inspection' | 'asn-grn' | 'history'
+type TabKey = 'overview' | 'vendor-assign' | 'costing' | 'pre-prod' | 'production' | 'samples' | 'inspection' | 'asn-grn' | 'history'
 
 export function SubOrderPanel({
   order,
@@ -2030,7 +2655,13 @@ export function SubOrderPanel({
   const [showFIModal,   setShowFIModal]   = useState(false)
 
   const tabs: { key: TabKey; label: string; count?: number; alert?: boolean }[] = [
-    { key: 'overview',    label: 'Overview' },
+    { key: 'overview',      label: 'Overview' },
+    ...(['assigned','vendor'].includes(order.currentStage) ? [
+      { key: 'vendor-assign' as TabKey, label: 'Vendor RFQ',
+        alert: order.rfqStatus === 'not-started' || order.rfqStatus === 'closed-no-vendor',
+        count: (order.vendorRFQs ?? []).filter(r => r.status === 'responded').length || undefined,
+      },
+    ] : []),
     { key: 'costing',     label: 'Costing & PO', alert: order.costStatus === 'pending' || order.costStatus === 'submitted' },
     { key: 'pre-prod',    label: 'Pre-Production', count: order.preProdStages.filter(s => s.status !== 'approved').length || undefined },
     { key: 'production',  label: 'Production' },
@@ -2206,6 +2837,7 @@ export function SubOrderPanel({
               onRequestFI={() => setShowFIModal(true)}
             />
           )}
+          {activeTab === 'vendor-assign' && <VendorAssignTab order={order} />}
           {activeTab === 'costing' && <CostingTab order={order} />}
           {activeTab === 'pre-prod' && <PreProdTab order={order} />}
           {activeTab === 'production' && <ProductionTab order={order} onUpdate={() => setShowProdModal(true)} />}
@@ -2223,13 +2855,9 @@ export function SubOrderPanel({
 
 export default function SubOrderDetailPage({ id, initialTab: tabProp }: { id: string; initialTab?: string }) {
   const router = useRouter()
-  const validTabs: TabKey[] = ['overview','costing','pre-prod','production','samples','inspection','asn-grn','history']
+  const validTabs: TabKey[] = ['overview','vendor-assign','costing','pre-prod','production','samples','inspection','asn-grn','history']
   const initialTab: TabKey = (tabProp && validTabs.includes(tabProp as TabKey) ? tabProp : 'overview') as TabKey
-  const { data: apiOrder, loading, error } = useSubOrder(id)
-  const order = useMemo(
-    () => (apiOrder ? apiOrderToSubOrder(apiOrder) : null),
-    [apiOrder],
-  )
+  const { data: order, loading, error } = useSubOrder(id)
 
   if (loading) {
     return (

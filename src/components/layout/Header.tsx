@@ -31,7 +31,6 @@ export function Header({ title, subtitle }: { title?: string; subtitle?: string 
         style={{
           position:    'fixed',
           top:         0,
-          left:        'var(--ds-sidebar-width)',
           right:       0,
           height:      52,
           background:  'var(--ds-surface)',
@@ -42,7 +41,7 @@ export function Header({ title, subtitle }: { title?: string; subtitle?: string 
           zIndex:      20,
           gap:         10,
         }}
-        className="max-md:left-0"
+        className="left-0 md:left-[var(--ds-sidebar-width)]"
       >
         {/* Hamburger — mobile only */}
         <button
