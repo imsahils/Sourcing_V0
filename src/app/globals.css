@@ -277,6 +277,8 @@ a:hover { text-decoration: underline; }
 /* ── Manju Animations ────────────────────────────────────────────────────────── */
 @keyframes ds-fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes ds-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes ds-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
 .ds-fade-in { animation: ds-fadeIn 0.2s ease forwards; }
 
 /* ── Utility overrides ───────────────────────────────────────────────────────── */
