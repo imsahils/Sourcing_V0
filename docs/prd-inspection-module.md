@@ -1,10 +1,11 @@
-# Inspection Management Module — PRD v1
+# Inspection Management Module — PRD v1.1
 
 > **Module:** `/qa` (QA Manager) · `/portfolio/[id]?tab=inspection` (Sourcing POC) · `/inspector` (Inspector mobile web) · `/vendor-portal?view=inspections` (Vendor)
-> **Status:** Draft — supersedes Spec v0.6 (Maheshwar PV)
+> **Status:** Draft — supersedes Spec v0.6 (Maheshwar PV). Inspector mobile app partially built (see §18).
 > **Owner:** Sahil Sharma
-> **Last updated:** 21 May 2026
+> **Last updated:** 22 May 2026
 > **Phase 1 brand:** Bewakoof
+> **Build progress:** Inspector schedule view ✓ · Section A ✓ · Section B ✓ · Section D + Consultation ✓ · Schedule Action Sheet ✓ · Sections C, E, F (stubs)
 
 ---
 
@@ -41,6 +42,23 @@ This PRD replaces **Inspection Module Spec v0.6** (Maheshwar PV, 21 May 2026). I
 | 10 | New KPI: Vendor Not Ready Rate added to vendor scorecard | §8 |
 | 11 | Brand baseline corrected: Bewakoof confirmed as Phase 1 (not Nautinati) | §7 |
 | 12 | Tracker automation explicitly deferred to Reports module | §0, §6 |
+
+### Changes in v1.1 vs. v1 (Build Delta)
+
+Inspector mobile app build started in v1; these changes document decisions made during the build.
+
+| # | Change | Section(s) |
+|---|---|---|
+| 13 | AQL sampling table standard locked: **ANSI/ASQ Z1.4 Level II General Inspection, single sampling**. Lot bands A–P. Bewakoof defaults: Major 2.5, Minor 4.0 | §5.6D, §17 |
+| 14 | Borderline definition locked: a result is **borderline if actual defects equal the max allowed** on either Major or Minor axis. Borderline triggers a visual prompt to use consultation | §5.6D |
+| 15 | Consultation SLA visible to inspector: **30 min** target shown in dialog. Inspector can proceed with own judgement if unanswered (logged as no-response) | §5.6D, §10, §16 |
+| 16 | Override constraints locked: **mandatory reason min 8 chars**, three result options (Pass / Hold / Fail). Inspector override notifies QA Manager and Sourcing POC immediately when overriding Fail→Pass | §5.6D, §10 |
+| 17 | UI pattern adopted: **mobile-first overlay with phone-shaped frame (max 480px) on desktop** — hides Fabricate sidebar chrome when inspector is on `/inspector` route | §15.1 |
+| 18 | UI pattern adopted: **bottom sheet** for Add Defect, Consultation, Override, and Schedule Action — replaces full-screen forms for short-lived input | §15.1 |
+| 19 | Schedule action sheet flow built: Confirm Date / Flag Conflict / Propose New Date all surface in a single bottom sheet with status-aware initial mode | §5.4, §15.1 |
+| 20 | UX confirmation pattern: **card flash highlight** (2s green pulse) on schedule list after action sheet success, before any actual state mutation | §5.4 |
+| 21 | Section B no-cap behaviour explicit: **no upper limit on defect entries or photos per defect**. Major defects block save without at least 1 photo | §5.6B |
+| 22 | Section stepper live badges: Section B shows defect count, Section D shows `!` when an active consultation exists | §15.1 |
 
 ---
 
@@ -427,6 +445,26 @@ Inspector sees a personal schedule of all inspections assigned to them.
 5. On confirm: vendor receives email + in-app notification with inspector name, confirmed date, time window
 6. Status → `Confirmed`
 
+**Schedule action sheet (built v1.1)**
+
+Tapping a card's CTA opens a bottom sheet rather than navigating to a new screen, for short-lived schedule actions. The sheet's initial mode is determined by the card's status:
+
+| Card status | Sheet opens in mode | Actions available |
+|---|---|---|
+| `pending_confirmation` | `menu` | Confirm this date · Flag a conflict |
+| `missed` / `not_ready` / `rescheduled` | `propose` | Propose new date (date picker + reason) |
+| `scheduled (today)` · `in_progress` · `passed` · `failed` · `unscheduled` (view) | n/a — navigates to execution form or report | — |
+
+Within the sheet:
+
+- **Context strip** at the top of every variant: style name, vendor + city, current scheduled date — so the inspector knows which inspection they're acting on
+- **Confirm this date**: single-tap → 700ms submitting state → success card "Date confirmed — vendor and QA Manager notified" → sheet auto-closes
+- **Flag a conflict**: reason textarea (min 8 chars) → "Send to QA Manager" → submitting → success
+- **Propose new date**: original date shown struck-through, native date picker (min = today), reason textarea with status-specific placeholder copy → "Send for approval" → submitting → success
+- **Submitting state** blocks the close (tap on overlay is ignored) to prevent accidental dismiss
+- **Success state** shows the message that will be sent to the next actor (vendor / QA Manager) and auto-closes after 1.1s
+- **Card flash**: after the sheet closes on success, the card flashes a 2s green pulse on the schedule list as visual confirmation
+
 ---
 
 ### 5.5 Day of Inspection — Visit Tracking
@@ -538,6 +576,14 @@ System auto-tallies: Total Major count, Total Minor count.
 | Same defect type found at high frequency | Inspector can enter one defect entry with count > 1 rather than individual entries |
 | Inspector wants to attach 15+ photos for a single defect | Allowed — no upper limit |
 
+**B.4 UI implementation (built v1.1)**
+
+- **PP Sample is presented as STEP 1** in this section with a "Required" pill until captured. Until PP Sample is captured, the "Add Defect" button is disabled with a hint: "Capture PP Sample photo first."
+- **Live totals header**: Three cards at the top of the section show Major / Minor / Total entries counts in real time. Major card is danger-styled, Minor is warning-styled.
+- **Defect rows**: Each defect appears as a card with a severity-coloured left border (red for Major, amber for Minor), severity pill, count `×N`, photo count, defect description, photo thumbnail strip (up to 5 visible, then `+N` overflow indicator), and edit/delete actions.
+- **Add / Edit Defect** opens a bottom sheet (not a full-screen modal) with: description textarea, severity toggle, count stepper with −/+ buttons, and a photo grid with add/remove. The Save button is disabled until: description present, count ≥ 1, and at least one photo if severity = Major.
+- **Info banner at bottom of section**: Explicit callout that "Replaces the AppSheet 8-defect limit" so inspectors trained on the old system know the constraint is gone.
+
 ---
 
 #### Section C — Measurement Verification
@@ -622,6 +668,25 @@ This replaces the WhatsApp/phone consultation with an in-system trail. SLA: QA M
 | AQL is on the boundary (exactly at max allowed) | System marks as Pass. Inspector shown warning that this is borderline. Consultation suggested |
 | Packed qty too small for standard AQL sampling | System falls back to 100% inspection or shows minimum sample size. QA Manager to confirm approach |
 | Inspector requests consultation but QA Manager doesn't respond in 30 min | Inspector can proceed with own judgement; the unanswered consultation is logged |
+
+**D.3 AQL standard (locked v1.1)**
+
+The AQL calculation implements **ANSI/ASQ Z1.4-2003 (R2018), Table II-A — Single Sampling Plans for Normal Inspection**, at **General Inspection Level II**. Implementation lives in `src/lib/aql.ts`.
+
+- **Lot bands** (sample size code letters A through P) cover lot sizes from 2 to 500,000 units. Bewakoof's typical lot sizes (300–10,000) map to code letters H (sample 50), J (sample 80), K (sample 125), and L (sample 200).
+- **Accept numbers** are pulled from the table at the configured AQL level. Reject = Accept + 1.
+- **Borderline** is defined as `actual = max_allowed` on either Major or Minor axis. The system flags borderline cases visually and highlights the "Request Manager Input" button in primary terra-cotta to nudge consultation.
+- **Lot < 2** falls back to code letter A (sample size 2). **Lot > 500,000** falls back to code letter P.
+
+**D.4 UI implementation (built v1.1)**
+
+- **AQL plan card** at the top lists: lot size (packed qty), lot band, sample size + code letter, both AQL levels with max allowed counts.
+- **Findings vs. allowed cards** — twin cards (Major and Minor), each with: actual number (large, danger-red if exceeds), `/ N allowed` denominator, progress bar (terra-cotta below limit, warning at limit, danger over limit), and status caption ("Exceeds by N", "At limit", or "N below limit").
+- **System result card** — large card with circular status icon (CheckCircle / XCircle / AlertCircle), label (PASS / FAIL / HOLD), and a borderline indicator caption when applicable. When override is set, the label switches to the override value and the title changes to "Final result (overridden)".
+- **Consultation CTA** — sits in its own subsection labelled "QA Manager consultation". When no consultation is active, shows the "Request Manager Input" button (terra-cotta primary when borderline, secondary otherwise). When active, shows the ConsultationPanel.
+- **Consultation dialog** (bottom sheet): displays AQL snapshot (sample size, lot, max Major/Minor, actual Major/Minor with actuals highlighted in danger when at/over limit), defect summary (top 5 with severity colour dot + count, then `+N more` overflow), inspector note textarea, info banner "Replaces WhatsApp. Both your request and the QA Manager's recommendation are logged in the report audit trail. Response SLA: 30 min."
+- **ConsultationPanel** (in-page after submit): shows pending spinner with "Awaiting QA Manager response" → on response, shows success-styled card with "Recommends: PASS — [Manager name]" + rationale text. Both inspector note and manager response are visible.
+- **Override flow** (bottom sheet): warning banner "This is a high-attention action. Overrides are permanently logged." → three-button result selector (Pass / Hold / Fail) → reason textarea (min 8 chars enforced) → Save Override (warning-styled button). When active, an inline warning panel shows on the section with "System: X → Override: Y" + reason + Clear button.
 
 ---
 
@@ -1495,6 +1560,31 @@ Access is controlled at two levels: screen access (can the user see the screen) 
 
 ## 15. UI Screens
 
+### 15.0 UI patterns and layout decisions (locked v1.1)
+
+These cross-cutting patterns apply to all inspector-facing screens. They were locked during the v1.1 build of the inspector mobile app.
+
+**Mobile-first overlay with phone-shaped desktop frame**
+
+The `/inspector` route uses a fixed-position overlay that takes over the full viewport, hiding the Fabricate sidebar and global header. On mobile (the inspector's primary device) it fills the screen edge-to-edge. On desktop (for demos and QA Manager looking over the shoulder) it constrains to **max 480px wide centred on the page**, with a subtle drop-shadow to read as a phone-shaped surface. This avoids forcing the inspector UX into a desktop chrome it was never designed for.
+
+**Bottom sheet for short-lived input**
+
+All short-lived inspector input (Add / Edit Defect, Request Consultation, Override Result, Schedule Action) uses a **bottom sheet pattern** rather than a full-screen modal or new route. The sheet slides up from the bottom of the viewport, includes a drag handle, locks body scroll while open, and is dismissible by tap-outside or close button. Sheet structure: sticky title bar with close button → scrollable content → sticky bottom action bar.
+
+**Card flash highlight after action**
+
+After a schedule action sheet closes on success, the originating card briefly flashes with a green pulse (2s) on the schedule list. This provides visual confirmation of the action before the underlying state mutation (which, in Phase 1, is mocked).
+
+**Section stepper with live badges**
+
+The execution form's section stepper shows live state for each section:
+- Section B: live defect count badge (e.g. "B · 4")
+- Section D: `!` badge when an active consultation exists
+This lets the inspector see the state of every section without navigating into them.
+
+---
+
 ### 15.1 New Screens
 
 #### Inspection Dashboard (Role-specific home)
@@ -1768,4 +1858,69 @@ These remain open after this PRD draft and need resolution before build.
 
 ---
 
-*End of PRD v1*
+## 18. Implementation Status (v1.1)
+
+Inspector mobile app is in active build. The QA Manager, Sourcing POC, vendor portal, and Fabricate OMS integration screens are still on the to-build list. This section tracks where each piece stands.
+
+### Inspector mobile app — `/inspector`
+
+| Component | Status | Notes |
+|---|---|---|
+| Mobile-first layout + phone-shaped frame | ✅ Built | `src/app/inspector/layout.tsx` |
+| Schedule view with 6 tabs | ✅ Built | Today / Upcoming / Pending / Unscheduled / Completed / Missed. Badge counts + urgency dots |
+| Inspection cards (status-aware CTAs) | ✅ Built | Card flash on success; on-behalf-of badge; re-inspection round badge |
+| Schedule action sheet (Confirm / Flag / Propose) | ✅ Built | Bottom sheet with status-aware initial mode |
+| Execution form — section stepper + sub-header | ✅ Built | Sticky stepper with live badges |
+| Section A — Order & Packing | ✅ Built (scaffold) | Layout + mandatory captures + per-colour rows. Photo capture mocked. Field state not yet persisted. |
+| Section B — Workmanship | ✅ Built | PP sample capture, unlimited defects, Add Defect bottom sheet, photo grid, severity validation |
+| Section C — Measurements | ⚠️ Stub | Placeholder card. To build: per-POM table + photo fallback |
+| Section D — AQL Evaluation | ✅ Built | Live AQL plan, findings gauges, system result, override, consultation flow |
+| Section E — Test Results | ⚠️ Stub | Placeholder card. To build: 6-row checklist, GPT 4-state, waiver entry |
+| Section F — Remarks & Sign-off | ⚠️ Stub | Placeholder card. To build: remarks, final result confirm, factory rep signature, inspector sign-off |
+| Consultation dialog | ✅ Built | Bottom sheet with AQL snapshot, defect summary, mock 2.5s async response |
+| Override dialog | ✅ Built | Bottom sheet, 3-button result selector, min 8-char reason |
+| Mock data | ✅ Built | 14 inspections seeded for Arul Pandey across all 6 tabs (`src/lib/inspection-mock.ts`) |
+| AQL helper | ✅ Built | ANSI/ASQ Z1.4 Level II single sampling (`src/lib/aql.ts`) |
+
+### Inspector — not yet built
+
+| Component | Notes |
+|---|---|
+| Real photo capture | Currently mocked with gradient thumbnails. Needs camera API / file picker integration |
+| `localStorage` auto-save | "Auto-saved" chip is decorative; state isn't persisted across page reloads yet |
+| Geo verification on Start Inspection | The `geo_verified` flow + 500m radius check (§5.5) isn't wired |
+| Inspection submit → routing | The "Review & Submit" button on Section F's bottom bar doesn't trigger actual submission |
+| Action sheet → state mutation | Action sheet shows success UI but the underlying request status doesn't actually update in mock data (the card flash is the only feedback) |
+| Push notifications | Web push / native push not wired |
+
+### Other modules — not yet built
+
+| Module | Status | Owner |
+|---|---|---|
+| `/qa` — QA Manager dashboard | ⚠️ Existing stub from prior build (611 lines, schema not aligned to PRD v1.1) | Refactor needed |
+| Weekly Inspection Planning Calendar (§15.1) | 🔲 Not started | New screen |
+| Inspector assignment panel | 🔲 Not started | Modal off QA Manager dashboard |
+| Consultation response inbox (for QA Manager) | 🔲 Not started | Counterpart to inspector consultation flow |
+| GPT waiver request / approval screens | 🔲 Not started | Sourcing POC + QA Manager surfaces |
+| `/vendor-portal` inspection sub-view | ⚠️ Existing stub | Vendor request raise + report view + corrective action form |
+| `/portfolio/[id]?tab=inspection` — Sourcing POC view | ⚠️ Existing stub | Inspections tab + QA Cleared Qty + raise-on-behalf CTA |
+| Fabricate spine update — QA Cleared Qty stage (§6.1) | 🔲 Not started | Requires types.ts + data.ts changes |
+| Report PDF generation (§7) | 🔲 Not started | Bewakoof template per §7 |
+
+### Built data model
+
+These types are live in `src/lib/inspection-mock.ts` and ready for the rest of the build to consume:
+
+- `Inspector` (with `inspector_type` + `agency_name`)
+- `InspectionRequest` (with `inspection_requested_qty_per_color`, `on_behalf_of_vendor_id`)
+- `Defect`, `Consultation`, `ConsultationResponse`, `InspectorOverride` (in `InspectionFormClient.tsx` — to be hoisted when other surfaces need them)
+- `ScheduleTab` enum + `classifyTab()` selector
+
+Still to add:
+- `GPTWaiver` (§5.9 + §11)
+- `InspectionAssignment` (§11) — currently inlined into `InspectionRequest`
+- `MeasurementEntry`, `CorrectiveAction`, `InspectionDecision` (§11)
+
+---
+
+*End of PRD v1.1*
