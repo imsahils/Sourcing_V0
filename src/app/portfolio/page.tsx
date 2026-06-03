@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo, useRef, useCallback, Suspense, useEffect } from 'react'
+import { useState, useMemo, useRef, useCallback, Suspense, useEffect, Fragment } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plus, Download, Filter, ChevronUp, ChevronDown, MoreHorizontal,
@@ -8,6 +8,7 @@ import {
   Building2, MapPin, Star, AlertCircle, ChevronRight, Search,
   Calendar, Clock, FlaskConical, Package, Upload, ChevronLeft,
   Layers, Factory, ScanLine, Truck, CalendarCheck, Eye, Table2, LayoutGrid,
+  Scissors, GitBranch, Edit2,
 } from 'lucide-react'
 import { Header } from '@/components/layout/Header'
 import { StatusBadge, OrderTypeBadge, TierBadge } from '@/components/shared/StatusBadge'
@@ -20,6 +21,8 @@ import { cn } from '@/lib/utils'
 import type { SubOrder, SubOrderStatus } from '@/lib/types'
 import { subOrders as mockSubOrders } from '@/lib/data'
 import { useCurrentUser } from '@/lib/user-context'
+import { type OpenCostingBreakdown, deriveOpenCostingTotals } from '@/lib/vendor-costing'
+import { useCostingStore, type CostingOrder, type CostStatus, type RFQRecord, type RFQStatus } from '@/lib/costing-store'
 import { SubOrderPanel } from '@/app/portfolio/[id]/SubOrderDetailClient'
 import {
   SAMPLING_ORDERS, STAGE_CONFIG, STAGE_IDS, cfg,
@@ -28,7 +31,7 @@ import {
 } from '@/lib/sampling'
 import {
   INITIAL_PO_RECORDS, VENDOR_D365_CODES, getOTBLines, getWH, poTotalQty, poTotalValue, sizesFromLines,
-  type PORecord,
+  type PORecord, type POStatus,
 } from '@/lib/purchase-orders'
 import { TrackerView } from './TrackerView'
 
@@ -3047,180 +3050,9 @@ function VendorAssignView() {
 // COSTING VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type CostStatus = 'no-vendor' | 'pending' | 'submitted' | 'approved' | 'rejected' | 'escalated'
+// CostStatus and CostingOrder are imported from @/lib/costing-store
 
-type CostingOrder = {
-  id: string
-  styleCode: string
-  styleName: string
-  colour: string
-  category: string
-  vendor: string
-  vendorLocation: string
-  vendorId: string
-  orderQty: number
-  targetPrice: number
-  costStatus: CostStatus
-  /** Date buying team requires the goods — OTIF is measured against this. Never shared with vendor. */
-  buyingExpectedDate: string
-  /** Date sourcing POC tells the vendor — earlier than buyingExpectedDate to build in buffer. */
-  vendorTargetDate: string
-  season: string
-  submittedCost?: number
-  breakdown?: {
-    fabric: number; cmt: number; trims: number
-    print: number; packaging: number; other: number
-  }
-  submittedOn?: string
-  approvedBy?: string
-  approvedOn?: string
-  rejectedReason?: string
-  escalationReason?: string
-  notes?: string
-  // Vendor confirmed inward date (set after costing approval)
-  confirmedInwardDate?: string
-  inwardDateConfirmed?: boolean
-}
-
-// ─── Each entry represents a distinct real-world costing scenario ─────────────
-//
-//  1. no-vendor      — style not yet assigned to any vendor
-//  2. pending        — vendor assigned, quote not yet submitted
-//  3. submitted ✓    — quote under target, awaiting POC approval
-//  4. submitted ~    — quote slightly over target (+5%), awaiting approval
-//  5. submitted ✗    — quote significantly over target (+14%), auto-escalated
-//  6. escalated      — waiting for category head sign-off
-//  7. rejected       — POC rejected, vendor must resubmit
-//  8. approved       — costing approved, inward date not yet confirmed by vendor
-//  9. approved+date  — approved AND vendor has confirmed inward date (PO can be raised)
-// 10. approved+PO    — PO already raised (full cycle complete)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const INITIAL_COSTING_ORDERS: CostingOrder[] = [
-
-  // ── Scenario 1: No vendor assigned yet ──────────────────────────────────────
-  {
-    id: 'NNKNTW250010', styleCode: 'NN407-221', styleName: 'Girls Tiered Floral Dress',
-    colour: 'PEACH', category: 'Wovens', vendor: '', vendorLocation: '', vendorId: '',
-    orderQty: 600, targetPrice: 265, costStatus: 'no-vendor',
-    buyingExpectedDate: '2026-06-30', vendorTargetDate: '2026-06-15',
-    season: 'SS25',
-  },
-
-  // ── Scenario 2: Vendor assigned, quote not yet submitted ─────────────────────
-  {
-    id: 'NNKNTW250011', styleCode: 'NN412-089', styleName: 'Boys Cargo Jogger',
-    colour: 'OLIVE', category: 'Wovens', vendor: 'IDS FASHION', vendorLocation: 'NOIDA', vendorId: 'v3',
-    orderQty: 450, targetPrice: 320, costStatus: 'pending',
-    buyingExpectedDate: '2026-06-25', vendorTargetDate: '2026-06-10',
-    season: 'SS25',
-  },
-
-  // ── Scenario 3: Quote submitted — under target (good) ────────────────────────
-  {
-    id: 'NNKNTW250012', styleCode: 'NN409-155', styleName: 'Girls Smocked Kurta Set',
-    colour: 'YELLOW', category: 'Knits', vendor: 'BS FASHION', vendorLocation: 'KOLKATA', vendorId: 'v4',
-    orderQty: 720, targetPrice: 340, costStatus: 'submitted',
-    submittedCost: 326,
-    breakdown: { fabric: 148, cmt: 82, trims: 40, print: 28, packaging: 16, other: 12 },
-    submittedOn: '2026-04-27',
-    buyingExpectedDate: '2026-06-15', vendorTargetDate: '2026-05-30',
-    season: 'SS25',
-    notes: 'Able to reduce CMT by 4% by co-loading with another order. Fabric sourced at prev. season price.',
-  },
-
-  // ── Scenario 4: Quote submitted — slightly over target (+5%, amber) ──────────
-  {
-    id: 'NNKNTW250013', styleCode: 'NN403-302', styleName: 'Boys Linen Blend Shirt',
-    colour: 'SKY BLUE', category: 'Wovens', vendor: 'DIV CREATIONS', vendorLocation: 'FARIDABAD', vendorId: 'v5',
-    orderQty: 380, targetPrice: 295, costStatus: 'submitted',
-    submittedCost: 310,
-    breakdown: { fabric: 152, cmt: 78, trims: 36, print: 0, packaging: 14, other: 30 },
-    submittedOn: '2026-04-26',
-    buyingExpectedDate: '2026-06-20', vendorTargetDate: '2026-06-05',
-    season: 'SS25',
-    notes: 'Linen blend yarn cost up 6% vs last season. Vendor proposes using 55/45 blend vs 60/40 to meet target — seeking POC direction.',
-  },
-
-  // ── Scenario 5: Quote submitted — significantly over target (+14%), escalated ─
-  {
-    id: 'NNKNTW250015', styleCode: 'NN415-078', styleName: 'Boys French Terry Sweatshirt',
-    colour: 'NAVY MELANGE', category: 'Knits', vendor: 'CAARVI TEXTILES', vendorLocation: 'DELHI', vendorId: 'v8',
-    orderQty: 550, targetPrice: 380, costStatus: 'escalated',
-    submittedCost: 434,
-    breakdown: { fabric: 198, cmt: 94, trims: 60, print: 42, packaging: 22, other: 18 },
-    submittedOn: '2026-04-24',
-    buyingExpectedDate: '2026-07-05', vendorTargetDate: '2026-06-20',
-    season: 'SS25',
-    escalationReason: 'Vendor cost exceeds target by 14.2% — auto-escalated to category head for approval.',
-    notes: 'French terry yarn prices elevated due to cotton futures spike. Vendor has confirmed no scope for reduction without quality compromise.',
-  },
-
-  // ── Scenario 6: Awaiting category head (escalated — not yet approved) ────────
-  {
-    id: 'NNKNTW250018', styleCode: 'NN422-190', styleName: 'Girls Velvet Pinafore',
-    colour: 'BURGUNDY', category: 'Wovens', vendor: 'ADITEE INTERNATIONAL', vendorLocation: 'JAIPUR', vendorId: 'v7',
-    orderQty: 300, targetPrice: 480, costStatus: 'escalated',
-    submittedCost: 545,
-    breakdown: { fabric: 240, cmt: 128, trims: 82, print: 48, packaging: 24, other: 23 },
-    submittedOn: '2026-04-22',
-    buyingExpectedDate: '2026-07-15', vendorTargetDate: '2026-07-01',
-    season: 'SS25',
-    escalationReason: 'Velvet sourcing cost +13.5% over target. Category head approval pending since 26-Apr.',
-    notes: 'Italian-origin velvet substitute proposed at ₹498 — category head reviewing quality sample before sign-off.',
-  },
-
-  // ── Scenario 7: Rejected — vendor must resubmit ──────────────────────────────
-  {
-    id: 'NNKNTW250019', styleCode: 'NN418-067', styleName: 'Boys Printed Co-ord Set',
-    colour: 'MULTI', category: 'Knits', vendor: 'PESOS VISION', vendorLocation: 'MUMBAI', vendorId: 'v9',
-    orderQty: 480, targetPrice: 355, costStatus: 'rejected',
-    buyingExpectedDate: '2026-06-27', vendorTargetDate: '2026-06-12',
-    season: 'SS25',
-    rejectedReason: 'CMT quoted at ₹115 vs benchmark of ₹85 for similar product. Please renegotiate — target is achievable based on prior season data.',
-  },
-
-  // ── Scenario 8: Approved — inward date not yet confirmed by vendor ────────────
-  {
-    id: 'NNKNTW250016', styleCode: 'NN408-245', styleName: 'Girls Embroidered Sharara Set',
-    colour: 'MAROON', category: 'Wovens', vendor: 'ARIHANT FASHIONS', vendorLocation: 'KOLKATA', vendorId: 'v2',
-    orderQty: 280, targetPrice: 520, costStatus: 'approved',
-    submittedCost: 498,
-    breakdown: { fabric: 210, cmt: 120, trims: 68, print: 52, packaging: 22, other: 26 },
-    submittedOn: '2026-04-18', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-22',
-    buyingExpectedDate: '2026-06-25', vendorTargetDate: '2026-06-10',
-    season: 'SS25',
-    notes: 'Zari work cost elevated. Approved — within acceptable 4.2% under target range.',
-  },
-
-  // ── Scenario 9: Approved + vendor confirmed inward date (PO pending) ──────────
-  // Vendor confirmed 5 Jun — within the buying window (12 Jun). OTIF safe.
-  {
-    id: 'NNKNTW250014', styleCode: 'NN401-190', styleName: 'Girls Printed Balloon Dress',
-    colour: 'CORAL', category: 'Knits', vendor: 'AND DESIGN', vendorLocation: 'JAIPUR', vendorId: 'v6',
-    orderQty: 900, targetPrice: 245, costStatus: 'approved',
-    submittedCost: 238,
-    breakdown: { fabric: 98, cmt: 72, trims: 28, print: 22, packaging: 11, other: 7 },
-    submittedOn: '2026-04-14', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-17',
-    buyingExpectedDate: '2026-06-12', vendorTargetDate: '2026-05-28',
-    confirmedInwardDate: '2026-06-02', inwardDateConfirmed: true,
-    season: 'SS25',
-  },
-
-  // ── Scenario 10: Full cycle — approved, date confirmed, PO raised ─────────────
-  // Vendor confirmed 22 May — slightly later than target (15 May) but still within buying window (1 Jun). OTIF safe.
-  {
-    id: 'NNKNTW250017', styleCode: 'NN411-312', styleName: 'Boys Printed Bermuda Shorts',
-    colour: 'COBALT', category: 'Wovens', vendor: 'PESOS VISION', vendorLocation: 'MUMBAI', vendorId: 'v9',
-    orderQty: 650, targetPrice: 198, costStatus: 'approved',
-    submittedCost: 192,
-    breakdown: { fabric: 82, cmt: 58, trims: 24, print: 18, packaging: 8, other: 2 },
-    submittedOn: '2026-04-10', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-12',
-    buyingExpectedDate: '2026-06-01', vendorTargetDate: '2026-05-15',
-    confirmedInwardDate: '2026-05-22', inwardDateConfirmed: true,
-    season: 'SS25',
-  },
-]
+// Costing order seed data now lives in @/lib/costing-store (INITIAL_ORDERS)
 
 // ─── Shared cost UI helpers ────────────────────────────────────────────────────
 
@@ -3246,14 +3078,14 @@ function VarianceChip({ target, quoted }: { target: number; quoted: number }) {
 }
 
 function BreakdownBar({ breakdown }: { breakdown: NonNullable<CostingOrder['breakdown']> }) {
-  const total = Object.values(breakdown).reduce((a, b) => a + b, 0)
+  const t = deriveOpenCostingTotals(breakdown)
+  const processing = breakdown.trimCostThread + breakdown.cmp + breakdown.valueAddition
+  const overheads  = breakdown.testing + breakdown.logistic + t.rejectionAmt + t.marginAmt
+  const total      = t.openCostingTotal
   const segs = [
-    { key: 'fabric',    color: 'bg-violet-400',   val: breakdown.fabric },
-    { key: 'cmt',       color: 'bg-purple-400', val: breakdown.cmt },
-    { key: 'trims',     color: 'bg-amber-400',  val: breakdown.trims },
-    { key: 'print',     color: 'bg-pink-400',   val: breakdown.print },
-    { key: 'packaging', color: 'bg-teal-400',   val: breakdown.packaging },
-    { key: 'other',     color: 'bg-slate-300',  val: breakdown.other },
+    { key: 'fabric',     color: 'bg-violet-400', val: t.ttlFabricCost },
+    { key: 'processing', color: 'bg-purple-400', val: processing },
+    { key: 'overheads',  color: 'bg-amber-400',  val: overheads },
   ].filter(s => s.val > 0)
   return (
     <div className="w-28">
@@ -3261,15 +3093,443 @@ function BreakdownBar({ breakdown }: { breakdown: NonNullable<CostingOrder['brea
         {segs.map(s => <div key={s.key} className={s.color} style={{ width: `${(s.val/total)*100}%` }} />)}
       </div>
       <p className="text-xs text-slate-400 mt-0.5">
-        {Math.round((breakdown.fabric/total)*100)}% fab · {Math.round((breakdown.cmt/total)*100)}% CMT
+        {Math.round((t.ttlFabricCost/total)*100)}% fab · {Math.round((processing/total)*100)}% proc
       </p>
+    </div>
+  )
+}
+
+// ─── Split Order Modal ────────────────────────────────────────────────────────
+
+type LocalSplitEntry = { vendorId: string; qty: string }
+
+function SplitOrderModal({
+  order,
+  vendors,
+  existingChildren,
+  onClose,
+  onConfirm,
+}: {
+  order: CostingOrder
+  vendors: ApiVendor[]
+  existingChildren: CostingOrder[]
+  onClose: () => void
+  onConfirm: (parentId: string, entries: LocalSplitEntry[]) => void
+}) {
+  // Seed with existing children if re-splitting, else one row pre-filled with current vendor
+  const seed: LocalSplitEntry[] = existingChildren.length > 0
+    ? existingChildren.map(c => ({ vendorId: c.vendorId, qty: String(c.orderQty) }))
+    : order.vendorId
+      ? [{ vendorId: order.vendorId, qty: '' }, { vendorId: '', qty: '' }]
+      : [{ vendorId: '', qty: '' }, { vendorId: '', qty: '' }]
+
+  const [entries, setEntries] = useState<LocalSplitEntry[]>(seed)
+
+  const n = (v: string) => parseInt(v, 10) || 0
+  const allocated  = entries.reduce((s, e) => s + n(e.qty), 0)
+  const remaining  = order.orderQty - allocated
+  const isBalanced = remaining === 0
+  const isOver     = remaining < 0
+  const canConfirm = remaining >= 0 && allocated > 0 && entries.length >= 2 && entries.every(e => e.vendorId && n(e.qty) > 0)
+
+  const setEntry = (i: number, patch: Partial<LocalSplitEntry>) =>
+    setEntries(prev => prev.map((e, idx) => idx === i ? { ...e, ...patch } : e))
+  const removeEntry = (i: number) =>
+    setEntries(prev => prev.filter((_, idx) => idx !== i))
+  const addEntry = () =>
+    setEntries(prev => [...prev, { vendorId: '', qty: '' }])
+
+  // Fill remaining qty into a field with no qty set yet
+  const fillRemaining = (i: number) => {
+    if (remaining > 0) setEntry(i, { qty: String(remaining) })
+  }
+
+  const [vendorSearches, setVendorSearches] = useState<string[]>(entries.map(() => ''))
+  const [openDropdown, setOpenDropdown] = useState<number | null>(null)
+
+  const setVSearch = (i: number, v: string) =>
+    setVendorSearches(prev => prev.map((s, idx) => idx === i ? v : s))
+
+  const usedVendorIds = entries.map(e => e.vendorId).filter(Boolean)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 bg-white flex items-center justify-between px-6 py-4 border-b border-slate-100 rounded-t-2xl z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
+              <Scissors className="w-4 h-4 text-violet-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">Split Order</h3>
+              <p className="text-xs text-slate-500 mt-0.5">{order.id} · {order.styleCode} · {order.colour}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Order summary */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-5 py-4 flex items-center gap-4">
+            <div className="flex-1">
+              <p className="text-sm font-bold text-slate-800">{order.styleName}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{order.category} · Target ₹{order.targetPrice}</p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-2xl font-black text-slate-900">{order.orderQty.toLocaleString()}</p>
+              <p className="text-xs text-slate-400">total pcs to allocate</p>
+            </div>
+          </div>
+
+          {/* Info banner */}
+          <div className="flex gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2.5 text-xs text-violet-700">
+            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            Assign quantities to at least 2 vendors. Splits cannot be further subdivided. Total must not exceed {order.orderQty.toLocaleString()} pcs — partial allocation is allowed.
+          </div>
+
+          {/* Split rows */}
+          <div className="space-y-3">
+            {entries.map((entry, i) => {
+              const vendor = vendors.find(v => v.id === entry.vendorId)
+              const filteredVendors = vendors.filter(v =>
+                (v.name.toLowerCase().includes((vendorSearches[i] || '').toLowerCase()) ||
+                 (v.location ?? '').toLowerCase().includes((vendorSearches[i] || '').toLowerCase())) &&
+                (!usedVendorIds.includes(v.id) || v.id === entry.vendorId)
+              )
+              return (
+                <div key={i} className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="flex items-center gap-2 bg-slate-50 px-4 py-2 border-b border-slate-100">
+                    <div className="w-5 h-5 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0">
+                      <span className="text-[10px] font-bold text-white">{i + 1}</span>
+                    </div>
+                    <span className="text-xs font-semibold text-slate-600">Split {i + 1}</span>
+                    <span className="ml-auto font-mono text-[10px] text-slate-400">
+                      {order.id}-{i + 1}
+                    </span>
+                    {entries.length > 2 && (
+                      <button onClick={() => removeEntry(i)}
+                        className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="p-4 grid grid-cols-[1fr_auto] gap-3 items-start">
+                    {/* Vendor picker */}
+                    <div className="relative">
+                      {vendor ? (
+                        <div className="flex items-center gap-2 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+                          <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0">
+                            <span className="text-[10px] font-bold text-white">{vendor.name.charAt(0)}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-violet-900 truncate">{vendor.name}</p>
+                            <p className="text-[10px] text-violet-600">{vendor.location} · OTIF {vendor.otifScore}%</p>
+                          </div>
+                          <button onClick={() => { setEntry(i, { vendorId: '' }); setVSearch(i, '') }}
+                            className="text-[10px] text-violet-500 hover:text-red-600 underline transition-colors flex-shrink-0">
+                            Change
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="relative border border-slate-200 rounded-lg overflow-hidden">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                            <input
+                              type="text"
+                              value={vendorSearches[i] || ''}
+                              onChange={e => { setVSearch(i, e.target.value); setOpenDropdown(i) }}
+                              onFocus={() => setOpenDropdown(i)}
+                              placeholder="Search vendor…"
+                              className="w-full pl-8 pr-3 py-2 text-xs focus:outline-none text-slate-700 placeholder:text-slate-400"
+                            />
+                          </div>
+                          {openDropdown === i && filteredVendors.length > 0 && (
+                            <div className="absolute z-20 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-40 overflow-y-auto w-full">
+                              {filteredVendors.map(v => (
+                                <button key={v.id}
+                                  onClick={() => { setEntry(i, { vendorId: v.id }); setVSearch(i, ''); setOpenDropdown(null) }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-violet-50 text-left text-xs border-b border-slate-100 last:border-0 transition-colors">
+                                  <div className="w-5 h-5 rounded-full bg-slate-700 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">
+                                    {v.name.charAt(0)}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-semibold text-slate-800 truncate">{v.name}</p>
+                                    <p className="text-slate-400">{v.location} · OTIF {v.otifScore}%</p>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Qty input */}
+                    <div className="w-28">
+                      <label className="text-[10px] text-slate-400 block mb-1">Qty (pcs)</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="1"
+                          max={order.orderQty}
+                          value={entry.qty}
+                          onChange={e => setEntry(i, { qty: e.target.value })}
+                          placeholder="0"
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-violet-500 text-right"
+                        />
+                        {remaining > 0 && !entry.qty && (
+                          <button onClick={() => fillRemaining(i)}
+                            className="absolute -bottom-5 right-0 text-[10px] text-violet-600 hover:text-violet-800 underline transition-colors whitespace-nowrap">
+                            Fill {remaining}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Add another split */}
+          {entries.length < 5 && (
+            <button onClick={addEntry}
+              className="w-full flex items-center justify-center gap-2 py-2.5 border border-dashed border-violet-300 rounded-xl text-xs font-medium text-violet-600 hover:bg-violet-50 hover:border-violet-400 transition-colors">
+              <Plus className="w-3.5 h-3.5" /> Add another vendor split
+            </button>
+          )}
+
+          {/* Running allocation */}
+          <div className={cn(
+            'rounded-xl px-5 py-4 flex items-center justify-between',
+            isOver     ? 'bg-red-50 border border-red-200'
+            : isBalanced ? 'bg-green-50 border border-green-200'
+            : 'bg-amber-50 border border-amber-200'
+          )}>
+            <div>
+              <p className={cn('text-sm font-bold',
+                isOver ? 'text-red-700' : isBalanced ? 'text-green-700' : 'text-amber-700'
+              )}>
+                {isOver ? `Over by ${Math.abs(remaining)} pcs` :
+                 isBalanced ? `All ${order.orderQty.toLocaleString()} pcs allocated ✓` :
+                 `${remaining} pcs remaining`}
+              </p>
+              <p className={cn('text-xs mt-0.5',
+                isOver ? 'text-red-500' : isBalanced ? 'text-green-600' : 'text-amber-500'
+              )}>
+                {allocated.toLocaleString()} / {order.orderQty.toLocaleString()} pcs allocated
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-0.5">
+              {entries.map((e, i) => n(e.qty) > 0 && (
+                <p key={i} className="text-[10px] text-slate-500">
+                  Split {i + 1}: <span className="font-semibold text-slate-700">{n(e.qty).toLocaleString()} pcs</span>
+                  {' '}({Math.round((n(e.qty) / order.orderQty) * 100)}%)
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 bg-white border-t border-slate-100 px-6 py-4 flex items-center justify-between gap-3 rounded-b-2xl">
+          <button onClick={onClose}
+            className="px-5 py-2 text-sm font-medium text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
+            Cancel
+          </button>
+          <button
+            disabled={!canConfirm}
+            onClick={() => onConfirm(order.id, entries)}
+            className={cn(
+              'flex items-center gap-2 px-6 py-2.5 text-sm font-semibold rounded-xl transition-colors',
+              canConfirm
+                ? 'bg-violet-600 text-white hover:bg-violet-700'
+                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+            )}>
+            <Scissors className="w-4 h-4" />
+            Confirm Split
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ─── Cost Submit Modal (POC submits on behalf of vendor) ──────────────────────
 
-type BreakdownDraft = { fabric: string; cmt: string; trims: string; print: string; packaging: string; other: string }
+// Open costing draft — string values for controlled inputs (same structure as vendor portal)
+type BreakdownDraft = {
+  mainFabricPrice: string; mainFabricConsumption: string
+  trimFabricPrice: string; trimFabricConsumption: string
+  trimCostThread: string; cmp: string; valueAddition: string
+  testing: string; logistic: string
+  rejectionPct: string; marginPct: string
+}
+
+const EMPTY_BREAKDOWN_DRAFT: BreakdownDraft = {
+  mainFabricPrice: '', mainFabricConsumption: '',
+  trimFabricPrice: '', trimFabricConsumption: '',
+  trimCostThread: '', cmp: '', valueAddition: '',
+  testing: '', logistic: '', rejectionPct: '', marginPct: '',
+}
+
+function draftFromOCBreakdown(b: OpenCostingBreakdown): BreakdownDraft {
+  return {
+    mainFabricPrice:       String(b.mainFabricPrice),
+    mainFabricConsumption: String(b.mainFabricConsumption),
+    trimFabricPrice:       String(b.trimFabricPrice),
+    trimFabricConsumption: String(b.trimFabricConsumption),
+    trimCostThread: String(b.trimCostThread), cmp: String(b.cmp), valueAddition: String(b.valueAddition),
+    testing: String(b.testing), logistic: String(b.logistic),
+    rejectionPct: String(b.rejectionPct), marginPct: String(b.marginPct),
+  }
+}
+
+function draftToOCBreakdown(d: BreakdownDraft): OpenCostingBreakdown {
+  const n = (v: string) => parseFloat(v) || 0
+  return {
+    mainFabricPrice: n(d.mainFabricPrice), mainFabricConsumption: n(d.mainFabricConsumption),
+    trimFabricPrice: n(d.trimFabricPrice), trimFabricConsumption: n(d.trimFabricConsumption),
+    trimCostThread: n(d.trimCostThread), cmp: n(d.cmp), valueAddition: n(d.valueAddition),
+    testing: n(d.testing), logistic: n(d.logistic),
+    rejectionPct: n(d.rejectionPct), marginPct: n(d.marginPct),
+  }
+}
+
+function calcDraftTotal(d: BreakdownDraft): number {
+  return deriveOpenCostingTotals(draftToOCBreakdown(d)).openCostingTotal
+}
+
+// ─── Portfolio Open Costing Form (mirrors vendor portal's OpenCostingFormFields) ─
+
+function PortfolioCostingFields({ draft, setDraft }: {
+  draft: BreakdownDraft
+  setDraft: (d: BreakdownDraft) => void
+}) {
+  const n = (v: string) => parseFloat(v) || 0
+  const mainFabricCost = n(draft.mainFabricPrice) * n(draft.mainFabricConsumption)
+  const trimFabricCost = n(draft.trimFabricPrice) * n(draft.trimFabricConsumption)
+  const ttlFabric      = mainFabricCost + trimFabricCost
+  const ttlProduct     = ttlFabric + n(draft.trimCostThread) + n(draft.cmp) + n(draft.valueAddition)
+  const set = (k: keyof BreakdownDraft) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setDraft({ ...draft, [k]: e.target.value })
+
+  return (
+    <div className="space-y-4">
+      {/* Fabric */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Fabric</p>
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Main Fabric Price (₹/m)</label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft.mainFabricPrice} onChange={set('mainFabricPrice')} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+              <input type="number" value={draft.mainFabricConsumption} onChange={set('mainFabricConsumption')} placeholder="0.00"
+                className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+            </div>
+            <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[72px]">
+              <p className="text-[9px] text-slate-400">Main Fabric</p>
+              <p className="text-sm font-bold text-violet-700">₹{mainFabricCost.toFixed(2)}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Trim Fabric Price (₹/m)</label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft.trimFabricPrice} onChange={set('trimFabricPrice')} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+              <input type="number" value={draft.trimFabricConsumption} onChange={set('trimFabricConsumption')} placeholder="0.00"
+                className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+            </div>
+            <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[72px]">
+              <p className="text-[9px] text-slate-400">Trim Fabric</p>
+              <p className="text-sm font-bold text-violet-700">₹{trimFabricCost.toFixed(2)}</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <div className="bg-slate-800 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <span className="opacity-70">TTL Fabric Cost</span>
+            <span className="font-bold">₹{ttlFabric.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Processing */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Processing</p>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            { k: 'trimCostThread' as const, label: 'Trim + Thread', hint: 'buttons, labels, thread' },
+            { k: 'cmp'            as const, label: 'CMP',           hint: 'cut, make, pack' },
+            { k: 'valueAddition'  as const, label: 'Value Addition',hint: 'embroidery, print' },
+          ]).map(({ k, label, hint }) => (
+            <div key={k}>
+              <label className="text-[10px] text-slate-400 block mb-1">{label} <span className="text-slate-300">({hint})</span></label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft[k]} onChange={set(k)} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex justify-end">
+          <div className="bg-slate-800 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <span className="opacity-70">TTL Product Cost</span>
+            <span className="font-bold">₹{ttlProduct.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Overheads */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Overheads & Margins</p>
+        <div className="grid grid-cols-2 gap-2">
+          {([
+            { k: 'testing'      as const, label: 'Testing (₹)',  isRs: true  },
+            { k: 'logistic'     as const, label: 'Logistic (₹)', isRs: true  },
+            { k: 'rejectionPct' as const, label: 'Rejection %',  isRs: false },
+            { k: 'marginPct'    as const, label: 'Margin %',     isRs: false },
+          ]).map(({ k, label, isRs }) => (
+            <div key={k}>
+              <label className="text-[10px] text-slate-400 block mb-1">{label}</label>
+              <div className="relative">
+                {isRs && <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>}
+                <input type="number" value={draft[k]} onChange={set(k)} placeholder="0"
+                  className={cn('w-full text-xs border border-slate-200 rounded-lg py-2 focus:outline-none focus:ring-1 focus:ring-violet-400',
+                    isRs ? 'pl-6 pr-2' : 'pl-3 pr-6')} />
+                {!isRs && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">%</span>}
+              </div>
+              {!isRs && draft[k] && (
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  = ₹{(ttlProduct * (parseFloat(draft[k]) || 0) / 100).toFixed(2)}/pc
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function CostSubmitModal({
   order,
@@ -3295,20 +3555,12 @@ function CostSubmitModal({
     (v.location ?? '').toLowerCase().includes(vendorSearch.toLowerCase())
   )
 
-  const [draft, setDraft] = useState<BreakdownDraft>({
-    fabric:    existing ? String(existing.fabric)    : '',
-    cmt:       existing ? String(existing.cmt)       : '',
-    trims:     existing ? String(existing.trims)     : '',
-    print:     existing ? String(existing.print)     : '0',
-    packaging: existing ? String(existing.packaging) : '',
-    other:     existing ? String(existing.other)     : '0',
-  })
+  const [draft, setDraft]               = useState<BreakdownDraft>(existing ? draftFromOCBreakdown(existing) : EMPTY_BREAKDOWN_DRAFT)
   const [notes, setNotes]               = useState(order.notes || '')
   const [confirmedDate, setConfirmedDate] = useState(order.confirmedInwardDate ?? '')
   const [submitted, setSubmitted]       = useState(false)
 
-  const num = (v: string) => parseFloat(v) || 0
-  const total = num(draft.fabric) + num(draft.cmt) + num(draft.trims) + num(draft.print) + num(draft.packaging) + num(draft.other)
+  const total    = calcDraftTotal(draft)
   const variance = total > 0 ? Math.round(((total - order.targetPrice) / order.targetPrice) * 100) : null
   const canSubmit = total > 0 && (!noVendor || !!selectedVendorId)
 
@@ -3316,22 +3568,10 @@ function CostSubmitModal({
     if (!canSubmit) return
     setSubmitted(true)
     setTimeout(() => {
-      onSubmit(order.id, total, {
-        fabric: num(draft.fabric), cmt: num(draft.cmt), trims: num(draft.trims),
-        print: num(draft.print), packaging: num(draft.packaging), other: num(draft.other),
-      }, notes, selectedVendorId, confirmedDate || undefined)
+      onSubmit(order.id, total, draftToOCBreakdown(draft), notes, selectedVendorId, confirmedDate || undefined)
       onClose()
     }, 1200)
   }
-
-  const fields: { key: keyof BreakdownDraft; label: string; hint: string }[] = [
-    { key: 'fabric',    label: 'Fabric Cost',        hint: 'Yarn, fabric, lining per piece' },
-    { key: 'cmt',       label: 'CMT Charges',         hint: 'Cut, Make, Trim labour' },
-    { key: 'trims',     label: 'Trims & Accessories', hint: 'Buttons, zippers, labels, patches' },
-    { key: 'print',     label: 'Print / Embroidery',  hint: '0 if not applicable' },
-    { key: 'packaging', label: 'Packaging',           hint: 'Polybag, hanger, sticker' },
-    { key: 'other',     label: 'Other / Overhead',    hint: 'Transport, misc charges' },
-  ]
 
   if (submitted) {
     const vendorName = selectedVendor?.name ?? order.vendor
@@ -3480,69 +3720,52 @@ function CostSubmitModal({
 
           <div className="flex gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2.5 text-xs text-violet-700">
             <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            Enter the <strong className="mx-0.5">per-piece cost</strong> breakdown as quoted by the vendor. This will be logged as a vendor submission.
+            Enter the vendor's <strong className="mx-0.5">open costing</strong> — fabric, processing, and overheads. Total will be calculated automatically.
           </div>
 
-          {/* Breakdown inputs */}
-          <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Cost Breakdown (₹ per piece)</p>
-            {fields.map(({ key, label, hint }) => (
-              <div key={key} className="flex items-center gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-slate-700">{label}</label>
-                  <p className="text-xs text-slate-400">{hint}</p>
-                </div>
-                <div className="relative w-28">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                  <input
-                    type="number" min="0" step="0.5" value={draft[key]}
-                    onChange={e => setDraft(p => ({ ...p, [key]: e.target.value }))}
-                    className="w-full pl-7 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 text-right"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+          {/* Open costing form — shared with vendor portal */}
+          <PortfolioCostingFields draft={draft} setDraft={setDraft} />
 
           {/* Total + variance */}
-          <div className="border-t border-slate-200 pt-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-slate-700">Total Quoted Cost</span>
-              <span className="text-xl font-bold text-slate-900">₹{total.toFixed(0)}</span>
-            </div>
-            {variance !== null && total > 0 && (
-              <div className={cn(
-                'mt-3 rounded-lg px-4 py-3 flex items-center justify-between',
-                variance < 0  ? 'bg-green-50 border border-green-200' :
-                variance <= 5 ? 'bg-amber-50 border border-amber-200' : 'bg-red-50 border border-red-200'
-              )}>
-                <div>
-                  <p className={cn('text-xs font-bold',
-                    variance < 0 ? 'text-green-700' : variance <= 5 ? 'text-amber-700' : 'text-red-700'
-                  )}>
-                    {variance < 0
-                      ? `₹${Math.abs(total - order.targetPrice).toFixed(0)} under target`
-                      : `₹${(total - order.targetPrice).toFixed(0)} over target`}
-                  </p>
-                  <p className={cn('text-xs mt-0.5',
+          {total > 0 && (
+            <div className="border-t border-slate-200 pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-bold text-slate-700">Total Open Costing</span>
+                <span className="text-xl font-bold text-slate-900">₹{total.toFixed(0)}</span>
+              </div>
+              {variance !== null && (
+                <div className={cn(
+                  'rounded-lg px-4 py-3 flex items-center justify-between',
+                  variance < 0  ? 'bg-green-50 border border-green-200' :
+                  variance <= 5 ? 'bg-amber-50 border border-amber-200' : 'bg-red-50 border border-red-200'
+                )}>
+                  <div>
+                    <p className={cn('text-xs font-bold',
+                      variance < 0 ? 'text-green-700' : variance <= 5 ? 'text-amber-700' : 'text-red-700'
+                    )}>
+                      {variance < 0
+                        ? `₹${Math.abs(total - order.targetPrice).toFixed(0)} under target`
+                        : `₹${(total - order.targetPrice).toFixed(0)} over target`}
+                    </p>
+                    <p className={cn('text-xs mt-0.5',
+                      variance < 0 ? 'text-green-600' : variance <= 5 ? 'text-amber-600' : 'text-red-600'
+                    )}>
+                      {variance < 0
+                        ? 'Within target — Sourcing POC can approve directly'
+                        : variance <= 5
+                          ? '0–5% above target — Sourcing Manager approval required'
+                          : 'Above 5% — Category Head approval required'}
+                    </p>
+                  </div>
+                  <span className={cn('text-lg font-black',
                     variance < 0 ? 'text-green-600' : variance <= 5 ? 'text-amber-600' : 'text-red-600'
                   )}>
-                    {variance < 0
-                      ? 'Within target — manager auto-approval likely'
-                      : variance <= 5
-                        ? 'Slightly over — manager review required'
-                        : 'Over 5% — will be escalated to Category Head'}
-                  </p>
+                    {variance > 0 ? '+' : ''}{variance}%
+                  </span>
                 </div>
-                <span className={cn('text-lg font-black',
-                  variance < 0 ? 'text-green-600' : variance <= 5 ? 'text-amber-600' : 'text-red-600'
-                )}>
-                  {variance > 0 ? '+' : ''}{variance}%
-                </span>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           {/* Notes */}
           <div>
@@ -3834,141 +4057,367 @@ function RequestPOModal({
 
 // ─── Cost Approval Modal (POC approves / rejects vendor quote) ───────────────
 
+type SplitApprovalEntry = {
+  rfqId: string
+  vendorId: string
+  vendorName: string
+  vendorLocation: string
+  qty: number
+  cost: number
+  breakdown?: OpenCostingBreakdown
+  rfqNotes?: string
+}
+
 function CostApprovalModal({
   order,
+  rfqRecords,
   onClose,
   onApprove,
   onReject,
 }: {
   order: CostingOrder
+  rfqRecords: RFQRecord[]
   onClose: () => void
-  onApprove: (orderId: string, notes: string) => void
+  onApprove: (orderId: string, notes: string, splits?: SplitApprovalEntry[]) => void
   onReject: (orderId: string, reason: string) => void
 }) {
-  const [mode, setMode]     = useState<'review' | 'reject'>('review')
-  const [notes, setNotes]   = useState(order.notes ?? '')
-  const [reason, setReason] = useState('')
+  const quotes = rfqRecords.filter(
+    r => r.orderId === order.id && r.status === 'responded' && r.submittedCost != null
+  )
+  const isMultiQuote = quotes.length > 1
+  const lowestCost   = isMultiQuote ? Math.min(...quotes.map(q => q.submittedCost!)) : null
 
-  const variance = order.submittedCost
-    ? Math.round(((order.submittedCost! - order.targetPrice) / order.targetPrice) * 100)
+  const [mode, setMode]           = useState<'review' | 'reject'>('review')
+  const [notes, setNotes]         = useState(order.notes ?? '')
+  const [reason, setReason]       = useState('')
+  const [selected, setSelected]   = useState<Set<string>>(
+    new Set(quotes.length === 1 ? [quotes[0].id] : [])
+  )
+  const [splitQtys, setSplitQtys] = useState<Record<string, string>>({})
+
+  const toggleVendor = (rfqId: string) =>
+    setSelected(prev => { const n = new Set(prev); n.has(rfqId) ? n.delete(rfqId) : n.add(rfqId); return n })
+
+  const selectedQuotes   = quotes.filter(q => selected.has(q.id))
+  const isMultiSelected  = selectedQuotes.length > 1
+
+  const totalAllocated  = isMultiSelected
+    ? selectedQuotes.reduce((s, q) => s + (parseInt(splitQtys[q.id] || '0') || 0), 0)
+    : order.orderQty
+  const remaining       = order.orderQty - totalAllocated
+  const isOverAllocated = totalAllocated > order.orderQty
+
+  const canApprove = isMultiQuote
+    ? selectedQuotes.length >= 1 &&
+      !isOverAllocated &&
+      (!isMultiSelected || selectedQuotes.every(q => parseInt(splitQtys[q.id] || '0') > 0))
+    : true
+
+  const singleVariance = order.submittedCost
+    ? Math.round(((order.submittedCost - order.targetPrice) / order.targetPrice) * 100)
     : 0
 
+  const handleApproveClick = () => {
+    if (isMultiSelected) {
+      const splits: SplitApprovalEntry[] = selectedQuotes.map(q => ({
+        rfqId: q.id, vendorId: q.vendorId, vendorName: q.vendorName,
+        vendorLocation: q.vendorLocation, qty: parseInt(splitQtys[q.id] || '0'),
+        cost: q.submittedCost!, breakdown: q.breakdown, rfqNotes: q.notes,
+      }))
+      onApprove(order.id, notes, splits)
+    } else {
+      onApprove(order.id, notes)
+    }
+  }
+
+  // Helper: one breakdown detail row
+  const BdRow = ({ label, fn }: { label: string; fn: (b: OpenCostingBreakdown) => string }) => (
+    <tr className="border-b border-slate-50 hover:bg-slate-50/40 transition-colors">
+      <td className="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{label}</td>
+      {quotes.map(q => (
+        <td key={q.id} className={cn('px-4 py-2 text-xs text-right font-medium',
+          selected.has(q.id) ? 'text-slate-800 bg-violet-50/20' : 'text-slate-400')}>
+          {q.breakdown ? fn(q.breakdown) : '—'}
+        </td>
+      ))}
+    </tr>
+  )
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-6">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full md:max-w-lg bg-white rounded-t-2xl md:rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-2xl bg-white shadow-2xl flex flex-col h-full overflow-hidden">
 
         {/* Header */}
         <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-slate-100 flex-shrink-0">
           <div>
-            <p className="text-sm font-bold text-slate-900">Review Costing</p>
-            <p className="text-xs text-slate-500 mt-0.5">{order.styleCode} · {order.colour} · {order.vendor}</p>
+            <p className="text-sm font-bold text-slate-900">
+              {isMultiQuote ? 'Compare & Approve Costing' : 'Review Costing'}
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {order.styleCode} · {order.colour} · {order.orderQty.toLocaleString()} pcs · Target ₹{order.targetPrice}
+            </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
-
-          {/* Cost summary */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-slate-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-slate-400 mb-1">Target</p>
-              <p className="text-base font-bold text-slate-700">₹{order.targetPrice}</p>
-            </div>
-            <div className="bg-slate-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-slate-400 mb-1">Quoted</p>
-              <p className="text-base font-bold text-slate-900">₹{order.submittedCost}</p>
-            </div>
-            <div className={cn('rounded-xl p-3 text-center', variance <= 0 ? 'bg-green-50' : variance <= 5 ? 'bg-amber-50' : 'bg-red-50')}>
-              <p className="text-xs text-slate-400 mb-1">Variance</p>
-              <p className={cn('text-base font-bold', variance <= 0 ? 'text-green-700' : variance <= 5 ? 'text-amber-700' : 'text-red-700')}>
-                {variance > 0 ? '+' : ''}{variance}%
-              </p>
-            </div>
-          </div>
-
-          {/* Breakdown */}
-          {order.breakdown && (
-            <div className="bg-slate-50 rounded-xl p-3">
-              <p className="text-xs font-semibold text-slate-600 mb-2">Cost Breakdown</p>
-              <div className="grid grid-cols-3 gap-2">
-                {Object.entries(order.breakdown).filter(([, v]) => v > 0).map(([k, v]) => (
-                  <div key={k} className="flex justify-between text-xs">
-                    <span className="text-slate-500 capitalize">{k}</span>
-                    <span className="font-medium text-slate-700">₹{v}</span>
-                  </div>
-                ))}
+        <div className="overflow-y-auto flex-1">
+          {isMultiQuote ? (
+            <>
+              {/* Section label */}
+              <div className="px-5 pt-4 pb-2 flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2.5 py-1">
+                  <GitBranch className="w-3 h-3" /> {quotes.length} vendor quotes
+                </span>
+                <span className="text-xs text-slate-400">Click a vendor column header to select / deselect</span>
               </div>
-            </div>
-          )}
 
-          {/* Vendor notes */}
-          {order.notes && (
-            <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 text-xs text-violet-800">
-              <p className="font-semibold mb-1">Vendor note</p>
-              <p>{order.notes}</p>
-            </div>
-          )}
+              {/* Comparison table */}
+              <div className="overflow-x-auto border-b border-slate-100">
+                <table className="w-full border-collapse min-w-[460px] text-sm">
+                  {/* Vendor header columns */}
+                  <thead>
+                    <tr>
+                      <th className="w-36 px-4 py-2 bg-slate-50 border-b border-r border-slate-100 text-left" />
+                      {quotes.map(q => {
+                        const isChecked = selected.has(q.id)
+                        const isBest    = q.submittedCost === lowestCost
+                        return (
+                          <th
+                            key={q.id}
+                            onClick={() => toggleVendor(q.id)}
+                            className={cn(
+                              'px-4 py-3 text-left cursor-pointer transition-colors border-b-2 select-none',
+                              isChecked
+                                ? 'bg-violet-50 border-violet-400'
+                                : 'bg-slate-50 border-slate-200 hover:bg-slate-100/60'
+                            )}
+                          >
+                            <div className="flex items-start gap-2">
+                              <input type="checkbox" checked={isChecked}
+                                onChange={() => toggleVendor(q.id)}
+                                onClick={e => e.stopPropagation()}
+                                className="mt-0.5 w-3.5 h-3.5 rounded accent-violet-600 flex-shrink-0"
+                              />
+                              <div>
+                                <p className="text-xs font-bold text-slate-800 leading-tight">{q.vendorName}</p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">{q.vendorLocation}</p>
+                                {isBest && (
+                                  <span className="inline-flex items-center gap-0.5 mt-1 text-[10px] font-bold text-green-700 bg-green-50 border border-green-200 rounded-full px-1.5 py-0.5">
+                                    ✶ Best value
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </th>
+                        )
+                      })}
+                    </tr>
+                  </thead>
 
-          {mode === 'review' ? (
-            /* Approval notes */
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Approval notes <span className="font-normal text-slate-400">(optional)</span>
-              </label>
-              <textarea
-                rows={3}
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                placeholder="Add any notes for your record or the vendor…"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
-              />
-            </div>
+                  <tbody>
+                    {/* Summary rows */}
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2.5 text-[10px] font-bold text-slate-400 uppercase tracking-wide border-r border-slate-100 bg-slate-50/50">Quoted ₹</td>
+                      {quotes.map(q => (
+                        <td key={q.id} className={cn('px-4 py-2.5', selected.has(q.id) ? 'bg-violet-50/20' : '')}>
+                          <span className="text-lg font-bold text-slate-900">₹{q.submittedCost}</span>
+                        </td>
+                      ))}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-wide border-r border-slate-100 bg-slate-50/50">Variance</td>
+                      {quotes.map(q => (
+                        <td key={q.id} className={cn('px-4 py-2', selected.has(q.id) ? 'bg-violet-50/20' : '')}>
+                          <VarianceChip target={order.targetPrice} quoted={q.submittedCost!} />
+                        </td>
+                      ))}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-wide border-r border-slate-100 bg-slate-50/50">Mix</td>
+                      {quotes.map(q => (
+                        <td key={q.id} className={cn('px-4 py-2', selected.has(q.id) ? 'bg-violet-50/20' : '')}>
+                          {q.breakdown
+                            ? <BreakdownBar breakdown={q.breakdown} />
+                            : <span className="text-slate-300 text-xs">—</span>}
+                        </td>
+                      ))}
+                    </tr>
+
+                    {/* Section: Cost Breakdown */}
+                    <tr className="bg-slate-100/60">
+                      <td colSpan={quotes.length + 1} className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-y border-slate-200">
+                        Cost Breakdown
+                      </td>
+                    </tr>
+                    <BdRow label="Main Fabric" fn={b => `₹${b.mainFabricPrice}/m × ${b.mainFabricConsumption}m`} />
+                    <BdRow label="Trim Fabric" fn={b => `₹${b.trimFabricPrice}/m × ${b.trimFabricConsumption}m`} />
+                    <BdRow label="Trim + Thread" fn={b => `₹${b.trimCostThread}`} />
+                    <BdRow label="CMP" fn={b => `₹${b.cmp}`} />
+                    <BdRow label="Value Add" fn={b => b.valueAddition > 0 ? `₹${b.valueAddition}` : '—'} />
+                    <BdRow label="Testing" fn={b => `₹${b.testing}`} />
+                    <BdRow label="Logistic" fn={b => `₹${b.logistic}`} />
+                    <BdRow label="Rejection %" fn={b => `${b.rejectionPct}%`} />
+                    <BdRow label="Margin %" fn={b => `${b.marginPct}%`} />
+
+                    {/* Section: Notes */}
+                    {quotes.some(q => q.notes) && (
+                      <>
+                        <tr className="bg-slate-100/60">
+                          <td colSpan={quotes.length + 1} className="px-4 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-y border-slate-200">
+                            Vendor Notes
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="px-4 py-2 border-r border-slate-100 bg-slate-50/50" />
+                          {quotes.map(q => (
+                            <td key={q.id} className={cn('px-4 py-2.5', selected.has(q.id) ? 'bg-violet-50/20' : '')}>
+                              {q.notes
+                                ? <p className="text-xs text-slate-500 italic leading-relaxed max-w-xs">{q.notes}</p>
+                                : <span className="text-slate-300 text-xs">—</span>}
+                            </td>
+                          ))}
+                        </tr>
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Split qty inputs */}
+              {isMultiSelected && (
+                <div className="mx-5 mt-4 rounded-xl border border-violet-200 bg-violet-50/30 p-3.5">
+                  <p className="text-xs font-semibold text-slate-700 mb-3 flex items-center gap-1.5">
+                    <GitBranch className="w-3 h-3 text-violet-600" />
+                    Allocate quantities
+                    <span className="font-normal text-slate-400 ml-0.5">(max {order.orderQty.toLocaleString()} pcs total)</span>
+                  </p>
+                  <div className="space-y-2.5">
+                    {selectedQuotes.map(q => (
+                      <div key={q.id} className="flex items-center gap-2">
+                        <p className="text-xs text-slate-600 flex-1 min-w-0 truncate font-medium">{q.vendorName}</p>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number" min={1} max={order.orderQty}
+                            value={splitQtys[q.id] ?? ''}
+                            onChange={e => setSplitQtys(prev => ({ ...prev, [q.id]: e.target.value }))}
+                            placeholder="0"
+                            onClick={e => e.stopPropagation()}
+                            className="w-24 text-sm text-right font-medium text-slate-800 border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-400 bg-white"
+                          />
+                          <span className="text-xs text-slate-400">pcs</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className={cn(
+                    'mt-3 flex items-center gap-2 text-xs font-semibold',
+                    isOverAllocated ? 'text-red-600' : remaining === 0 ? 'text-green-700' : 'text-amber-600'
+                  )}>
+                    <span className={cn('w-2 h-2 rounded-full flex-shrink-0',
+                      isOverAllocated ? 'bg-red-500' : remaining === 0 ? 'bg-green-500' : 'bg-amber-400'
+                    )} />
+                    {isOverAllocated
+                      ? `Over-allocated by ${Math.abs(remaining).toLocaleString()} pcs`
+                      : remaining === 0
+                        ? `Fully allocated — ${order.orderQty.toLocaleString()} pcs`
+                        : `${totalAllocated.toLocaleString()} / ${order.orderQty.toLocaleString()} pcs — partial split allowed`
+                    }
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
-            /* Rejection reason */
-            <div>
-              <label className="block text-xs font-semibold text-red-700 mb-1.5">
-                Reason for rejection <span className="text-red-400">*</span>
-              </label>
-              <textarea
-                rows={3}
-                value={reason}
-                onChange={e => setReason(e.target.value)}
-                placeholder="e.g. Cost exceeds target — please renegotiate fabric sourcing…"
-                className="w-full border border-red-200 rounded-xl px-3 py-2 text-sm text-slate-800 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
-                autoFocus
-              />
+            /* Single-vendor: original tiles + breakdown */
+            <div className="px-5 py-4 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3 text-center">
+                  <p className="text-xs text-slate-400 mb-1">Target</p>
+                  <p className="text-base font-bold text-slate-700">₹{order.targetPrice}</p>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3 text-center">
+                  <p className="text-xs text-slate-400 mb-1">Quoted</p>
+                  <p className="text-base font-bold text-slate-900">₹{order.submittedCost}</p>
+                </div>
+                <div className={cn('rounded-xl p-3 text-center',
+                  singleVariance <= 0 ? 'bg-green-50' : singleVariance <= 5 ? 'bg-amber-50' : 'bg-red-50')}>
+                  <p className="text-xs text-slate-400 mb-1">Variance</p>
+                  <p className={cn('text-base font-bold',
+                    singleVariance <= 0 ? 'text-green-700' : singleVariance <= 5 ? 'text-amber-700' : 'text-red-700')}>
+                    {singleVariance > 0 ? '+' : ''}{singleVariance}%
+                  </p>
+                </div>
+              </div>
+              {order.breakdown && (
+                <div className="bg-slate-50 rounded-xl p-3">
+                  <p className="text-xs font-semibold text-slate-600 mb-2">Cost Breakdown</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {Object.entries(order.breakdown).filter(([, v]) => v > 0).map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-xs">
+                        <span className="text-slate-500 capitalize">{k}</span>
+                        <span className="font-medium text-slate-700">₹{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {order.notes && (
+                <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 text-xs text-violet-800">
+                  <p className="font-semibold mb-1">Vendor note</p>
+                  <p>{order.notes}</p>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Approval / rejection notes */}
+          <div className="px-5 pb-4 mt-3">
+            {mode === 'review' ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Approval notes <span className="font-normal text-slate-400">(optional)</span>
+                </label>
+                <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)}
+                  placeholder="Add any notes for your record or the vendor…"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none" />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-red-700 mb-1.5">
+                  Reason for rejection <span className="text-red-400">*</span>
+                </label>
+                <textarea rows={3} value={reason} onChange={e => setReason(e.target.value)}
+                  placeholder="e.g. Cost exceeds target — please renegotiate fabric sourcing…"
+                  className="w-full border border-red-200 rounded-xl px-3 py-2 text-sm text-slate-800 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                  autoFocus />
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Footer actions */}
+        {/* Footer */}
         <div className="px-5 py-4 border-t border-slate-100 flex-shrink-0">
           {mode === 'review' ? (
             <div className="flex gap-3">
-              <button
-                onClick={() => setMode('reject')}
+              <button onClick={() => setMode('reject')}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-red-200 text-red-600 text-sm font-semibold rounded-xl hover:bg-red-50 transition-colors">
-                <X className="w-4 h-4" /> Reject
+                <X className="w-4 h-4" /> Reject{isMultiQuote ? ' all' : ''}
               </button>
-              <button
-                onClick={() => onApprove(order.id, notes)}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white text-sm font-semibold rounded-xl hover:bg-green-700 transition-colors">
-                <Check className="w-4 h-4" /> Approve
+              <button disabled={!canApprove} onClick={handleApproveClick}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white text-sm font-semibold rounded-xl hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                <Check className="w-4 h-4" />
+                {isMultiSelected ? `Approve & Split (${selectedQuotes.length} vendors)` : 'Approve'}
               </button>
             </div>
           ) : (
             <div className="flex gap-3">
-              <button
-                onClick={() => setMode('review')}
+              <button onClick={() => setMode('review')}
                 className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 text-sm font-semibold rounded-xl hover:bg-slate-50 transition-colors">
                 Back
               </button>
-              <button
-                disabled={!reason.trim()}
-                onClick={() => onReject(order.id, reason)}
+              <button disabled={!reason.trim()} onClick={() => onReject(order.id, reason)}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white text-sm font-semibold rounded-xl hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                 <X className="w-4 h-4" /> Confirm Rejection
               </button>
@@ -3979,7 +4428,6 @@ function CostApprovalModal({
     </div>
   )
 }
-
 // ─── Confirm Inward Date Modal (vendor finalises delivery date post-approval) ──
 
 function ConfirmInwardModal({
@@ -4087,93 +4535,1761 @@ function ConfirmInwardModal({
   )
 }
 
+// ─── Send RFQ Modal ───────────────────────────────────────────────────────────
+
+function SendRFQModal({
+  orders,
+  vendors,
+  preOrderId,
+  onClose,
+  onConfirm,
+}: {
+  orders: CostingOrder[]
+  vendors: ApiVendor[]
+  preOrderId?: string
+  onClose: () => void
+  onConfirm: (orderId: string, vendorId: string, vendorName: string, vendorLocation: string, qty: number, dueDate: string, notes?: string) => void
+}) {
+  const defaultDue = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 7)
+    return d.toISOString().split('T')[0]
+  })()
+
+  const [selectedOrderId, setSelectedOrderId] = useState(preOrderId ?? '')
+  const [orderSearch, setOrderSearch] = useState('')
+  const [vendorId, setVendorId] = useState('')
+  const [vendorSearch, setVendorSearch] = useState('')
+  const [qty, setQty] = useState('')
+  const [dueDate, setDueDate] = useState(defaultDue)
+  const [notes, setNotes] = useState('')
+  const [orderDropOpen, setOrderDropOpen] = useState(!preOrderId)
+  const [vendorDropOpen, setVendorDropOpen] = useState(false)
+
+  const selectedOrder = orders.find(o => o.id === selectedOrderId)
+  const selectedVendor = vendors.find(v => v.id === vendorId)
+
+  // When order is selected, pre-fill qty
+  const handleSelectOrder = (order: CostingOrder) => {
+    setSelectedOrderId(order.id)
+    setQty(String(order.orderQty))
+    setOrderDropOpen(false)
+    setOrderSearch('')
+  }
+
+  const filteredOrders = orders.filter(o =>
+    o.styleCode.toLowerCase().includes(orderSearch.toLowerCase()) ||
+    o.styleName.toLowerCase().includes(orderSearch.toLowerCase()) ||
+    o.id.toLowerCase().includes(orderSearch.toLowerCase())
+  )
+  const filteredVendors = vendors.filter(v =>
+    v.name.toLowerCase().includes(vendorSearch.toLowerCase()) ||
+    (v.location ?? '').toLowerCase().includes(vendorSearch.toLowerCase())
+  )
+
+  const canConfirm = !!selectedOrderId && !!vendorId && !!qty && parseInt(qty, 10) > 0 && !!dueDate
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <Send className="w-4 h-4 text-violet-600" />
+            <h3 className="font-bold text-slate-900">Send RFQ</h3>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          {/* Order selection */}
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Style / Order</label>
+            {selectedOrder && !orderDropOpen ? (
+              <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-semibold text-violet-900">{selectedOrder.styleCode}</p>
+                  <p className="text-[10px] text-violet-600">{selectedOrder.styleName} · {selectedOrder.colour}</p>
+                </div>
+                <button onClick={() => { setSelectedOrderId(''); setOrderDropOpen(true) }} className="text-[10px] text-violet-500 hover:text-red-600 underline">Change</button>
+              </div>
+            ) : (
+              <div className="relative">
+                <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden">
+                  <Search className="w-3.5 h-3.5 text-slate-400 ml-3 flex-shrink-0" />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={orderSearch}
+                    onChange={e => { setOrderSearch(e.target.value); setOrderDropOpen(true) }}
+                    onFocus={() => setOrderDropOpen(true)}
+                    placeholder="Search style code or name…"
+                    className="flex-1 px-2 py-2.5 text-xs focus:outline-none text-slate-700 placeholder:text-slate-400"
+                  />
+                </div>
+                {orderDropOpen && filteredOrders.length > 0 && (
+                  <div className="absolute z-20 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto w-full">
+                    {filteredOrders.map(o => (
+                      <button key={o.id} onClick={() => handleSelectOrder(o)}
+                        className="w-full flex items-start gap-2 px-3 py-2 hover:bg-violet-50 text-left text-xs border-b border-slate-100 last:border-0">
+                        <div className="flex-1">
+                          <p className="font-semibold text-slate-800">{o.styleCode} <span className="font-normal text-slate-400">· {o.id}</span></p>
+                          <p className="text-slate-500">{o.styleName} · {o.colour}</p>
+                        </div>
+                        <span className="text-slate-400 text-[10px] mt-0.5">{o.orderQty} pcs</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Vendor selection */}
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Vendor</label>
+            {selectedVendor && !vendorDropOpen ? (
+              <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-semibold text-slate-900">{selectedVendor.name}</p>
+                  <p className="text-[10px] text-slate-500">{selectedVendor.location}</p>
+                </div>
+                <button onClick={() => { setVendorId(''); setVendorDropOpen(true) }} className="text-[10px] text-slate-400 hover:text-red-600 underline">Change</button>
+              </div>
+            ) : (
+              <div className="relative">
+                <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden">
+                  <Search className="w-3.5 h-3.5 text-slate-400 ml-3 flex-shrink-0" />
+                  <input
+                    type="text"
+                    value={vendorSearch}
+                    onChange={e => { setVendorSearch(e.target.value); setVendorDropOpen(true) }}
+                    onFocus={() => setVendorDropOpen(true)}
+                    placeholder="Search vendor…"
+                    className="flex-1 px-2 py-2.5 text-xs focus:outline-none text-slate-700 placeholder:text-slate-400"
+                  />
+                </div>
+                {vendorDropOpen && filteredVendors.length > 0 && (
+                  <div className="absolute z-20 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto w-full">
+                    {filteredVendors.map(v => (
+                      <button key={v.id} onClick={() => { setVendorId(v.id); setVendorDropOpen(false); setVendorSearch('') }}
+                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-left text-xs border-b border-slate-100 last:border-0">
+                        <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">{v.name.charAt(0)}</div>
+                        <div>
+                          <p className="font-semibold text-slate-800">{v.name}</p>
+                          <p className="text-slate-400">{v.location}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Qty + Due date row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-600 block mb-1.5">Quantity (pcs)</label>
+              <input
+                type="number" min="1"
+                value={qty}
+                onChange={e => setQty(e.target.value)}
+                placeholder="0"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600 block mb-1.5">Response due</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={e => setDueDate(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Notes <span className="font-normal text-slate-400">(optional)</span></label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={2}
+              placeholder="Any specific requirements or context for the vendor…"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none text-slate-700 placeholder:text-slate-400"
+            />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 bg-white border-t border-slate-100 px-6 py-4 flex items-center justify-between gap-3 rounded-b-2xl">
+          <button onClick={onClose} className="px-5 py-2 text-sm font-medium text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">Cancel</button>
+          <button
+            disabled={!canConfirm}
+            onClick={() => {
+              if (!canConfirm || !selectedVendor) return
+              onConfirm(selectedOrderId, vendorId, selectedVendor.name, selectedVendor.location ?? '', parseInt(qty, 10), dueDate, notes || undefined)
+            }}
+            className={cn(
+              'flex items-center gap-2 px-6 py-2.5 text-sm font-semibold rounded-xl transition-colors',
+              canConfirm ? 'bg-violet-600 text-white hover:bg-violet-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+            )}>
+            <Send className="w-3.5 h-3.5" /> Send RFQ
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RFQ Sub-Tab ──────────────────────────────────────────────────────────────
+
+function RFQStatusChip({ status }: { status: RFQStatus }) {
+  const map: Record<RFQStatus, { label: string; cls: string }> = {
+    sent:      { label: 'Awaiting',  cls: 'bg-amber-50 text-amber-700 border-amber-200'  },
+    responded: { label: 'Responded', cls: 'bg-green-50 text-green-700 border-green-200'  },
+    overdue:   { label: 'Overdue',   cls: 'bg-red-50 text-red-600 border-red-200'        },
+    cancelled: { label: 'Cancelled', cls: 'bg-slate-100 text-slate-400 border-slate-200' },
+  }
+  const { label, cls } = map[status]
+  return <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border', cls)}>{label}</span>
+}
+
+function SLAChip({ dueDate }: { dueDate: string }) {
+  const diff = Math.ceil((new Date(dueDate).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000)
+  if (diff < 0)  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-600 border border-red-200">{Math.abs(diff)}d overdue</span>
+  if (diff === 0) return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-600 border border-amber-200">Due today</span>
+  if (diff <= 3)  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-600 border border-amber-200">{diff}d left</span>
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">{diff}d left</span>
+}
+
+function RFQSubTab({
+  rfqs,
+  orders,
+  vendors,
+  onSendRFQ,
+  onViewResponse,
+  onFollowUp,
+  onCancel,
+}: {
+  rfqs: RFQRecord[]
+  orders: CostingOrder[]
+  vendors: ApiVendor[]
+  onSendRFQ: (orderId?: string) => void
+  onViewResponse: (orderId: string) => void
+  onFollowUp: (rfqId: string) => void
+  onCancel: (rfqId: string) => void
+}) {
+  const [viewMode, setViewMode] = useState<'compact' | 'full'>('compact')
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
+
+  const activeRFQs = rfqs.filter(r => r.status !== 'cancelled')
+
+  const summaryTiles = [
+    { label: 'Total RFQs',        value: activeRFQs.length,                                          color: 'blue'  },
+    { label: 'Awaiting Response', value: activeRFQs.filter(r => r.status === 'sent').length,         color: 'amber' },
+    { label: 'Responded',         value: activeRFQs.filter(r => r.status === 'responded').length,    color: 'green' },
+    { label: 'Overdue',           value: activeRFQs.filter(r => r.status === 'overdue').length,      color: 'red'   },
+  ]
+
+  // Group by orderId for compact view
+  const orderIds = [...new Set(activeRFQs.map(r => r.orderId))]
+
+  const toggleExpand = (orderId: string) => {
+    setExpandedOrders(prev => {
+      const next = new Set(prev)
+      if (next.has(orderId)) next.delete(orderId); else next.add(orderId)
+      return next
+    })
+  }
+
+  return (
+    <div>
+      {/* Summary tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        {summaryTiles.map(({ label, value, color }) => {
+          const bg  = { blue: 'bg-violet-50 border-violet-200', amber: 'bg-amber-50 border-amber-200', green: 'bg-green-50 border-green-200', red: 'bg-red-50 border-red-200' }[color]
+          const txt = { blue: 'text-violet-700', amber: 'text-amber-700', green: 'text-green-700', red: 'text-red-600' }[color]
+          return (
+            <div key={label} className={cn('rounded-xl border p-4', bg)}>
+              <p className={cn('text-2xl font-black', txt)}>{value}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* View toggle + Send RFQ button */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+          <button onClick={() => setViewMode('compact')} className={cn('p-1.5 rounded-md transition-colors', viewMode === 'compact' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600')}>
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+          <button onClick={() => setViewMode('full')} className={cn('p-1.5 rounded-md transition-colors', viewMode === 'full' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600')}>
+            <Table2 className="w-4 h-4" />
+          </button>
+        </div>
+        <button
+          onClick={() => onSendRFQ(undefined)}
+          className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white text-xs font-semibold rounded-xl hover:bg-violet-700 transition-colors shadow-sm">
+          <Send className="w-3.5 h-3.5" /> Send RFQ
+        </button>
+      </div>
+
+      {activeRFQs.length === 0 ? (
+        <div className="text-center py-12 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">No RFQs sent yet.</div>
+      ) : viewMode === 'compact' ? (
+        /* ── Compact view — one row per order ── */
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200">
+                {['Style', 'Colour', 'Qty', 'Target', 'Vendors', 'Response', ''].map(h => (
+                  <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {orderIds.map(orderId => {
+                const order = orders.find(o => o.id === orderId)
+                const rfqsForOrder = activeRFQs.filter(r => r.orderId === orderId)
+                const respondedCount = rfqsForOrder.filter(r => r.status === 'responded').length
+                const hasOverdue = rfqsForOrder.some(r => r.status === 'overdue')
+                const isExpanded = expandedOrders.has(orderId)
+                return (
+                  <>
+                    <tr key={orderId} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-slate-900">{rfqsForOrder[0]?.styleCode ?? '—'}</p>
+                        <p className="text-[10px] text-slate-400">{rfqsForOrder[0]?.styleName}</p>
+                        <p className="text-[10px] text-slate-400 font-mono">{orderId}</p>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{rfqsForOrder[0]?.colour ?? '—'}</td>
+                      <td className="px-4 py-3 font-medium text-slate-700">{order?.orderQty?.toLocaleString() ?? '—'}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-700">{order ? `₹${order.targetPrice}` : '—'}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {rfqsForOrder.map(rfq => (
+                            <span key={rfq.id} className={cn(
+                              'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+                              rfq.status === 'responded' ? 'bg-green-50 border-green-200 text-green-700' :
+                              rfq.status === 'overdue'   ? 'bg-red-50 border-red-200 text-red-700' :
+                              'bg-amber-50 border-amber-200 text-amber-700'
+                            )}>
+                              {rfq.status === 'responded' ? <Check className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />}
+                              {rfq.vendorName.split(' ')[0]}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {hasOverdue
+                          ? <span className="text-red-600 font-semibold text-[10px]">Overdue</span>
+                          : <span className="text-slate-600">{respondedCount}/{rfqsForOrder.length} responded</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => toggleExpand(orderId)}
+                            className={cn('p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors', isExpanded && 'bg-slate-100 text-slate-700')}>
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => onSendRFQ(orderId)}
+                            className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 rounded-lg hover:bg-violet-100 transition-colors whitespace-nowrap">
+                            <Send className="w-2.5 h-2.5" /> Send RFQ
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${orderId}-expanded`}>
+                        <td colSpan={7} className="px-0 py-0 bg-slate-50">
+                          <div className="mx-4 my-2 border border-slate-200 rounded-xl overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  {['Vendor', 'Sent', 'Due', 'SLA', 'Status', 'Quote', 'Action'].map(h => (
+                                    <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase">{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rfqsForOrder.map(rfq => (
+                                  <tr key={rfq.id} className="border-t border-slate-100">
+                                    <td className="px-3 py-2">
+                                      <p className="font-medium text-slate-800">{rfq.vendorName}</p>
+                                      <p className="text-[10px] text-slate-400">{rfq.vendorLocation}</p>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-600">{fmtDate(rfq.sentDate)}</td>
+                                    <td className="px-3 py-2 text-slate-600">{fmtDate(rfq.dueDate)}</td>
+                                    <td className="px-3 py-2"><SLAChip dueDate={rfq.dueDate} /></td>
+                                    <td className="px-3 py-2"><RFQStatusChip status={rfq.status} /></td>
+                                    <td className="px-3 py-2 font-semibold text-slate-700">{rfq.submittedCost ? `₹${rfq.submittedCost}` : '—'}</td>
+                                    <td className="px-3 py-2">
+                                      <div className="flex items-center gap-1.5">
+                                        {rfq.status === 'responded' && (
+                                          <button onClick={() => onViewResponse(rfq.orderId)}
+                                            className="px-2 py-1 text-[10px] font-semibold text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 whitespace-nowrap">
+                                            View Response
+                                          </button>
+                                        )}
+                                        {(rfq.status === 'sent' || rfq.status === 'overdue') && (
+                                          <button onClick={() => onFollowUp(rfq.id)}
+                                            className="px-2 py-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 whitespace-nowrap">
+                                            Follow Up
+                                          </button>
+                                        )}
+                                        <button onClick={() => onCancel(rfq.id)}
+                                          className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors" title="Cancel RFQ">
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        /* ── Full / flat table view ── */
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  {['RFQ ID', 'Style', 'Colour', 'Vendor', 'Qty', 'Sent', 'Due', 'SLA', 'Status', 'Quote', 'Variance', ''].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeRFQs.map(rfq => {
+                  const order = orders.find(o => o.id === rfq.orderId)
+                  const variance = rfq.submittedCost && order
+                    ? Math.round(((rfq.submittedCost - rfq.targetPrice) / rfq.targetPrice) * 100)
+                    : null
+                  return (
+                    <tr key={rfq.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3 font-mono text-slate-500 text-[10px]">{rfq.id}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-slate-900">{rfq.styleCode}</p>
+                        <p className="text-[10px] text-slate-400 truncate max-w-32">{rfq.styleName}</p>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{rfq.colour}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-slate-800">{rfq.vendorName}</p>
+                        <p className="text-[10px] text-slate-400">{rfq.vendorLocation}</p>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-slate-700">{rfq.orderQty.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-slate-600">{fmtDate(rfq.sentDate)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fmtDate(rfq.dueDate)}</td>
+                      <td className="px-4 py-3"><SLAChip dueDate={rfq.dueDate} /></td>
+                      <td className="px-4 py-3"><RFQStatusChip status={rfq.status} /></td>
+                      <td className="px-4 py-3 font-bold text-slate-900">{rfq.submittedCost ? `₹${rfq.submittedCost}` : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-4 py-3">
+                        {variance !== null
+                          ? <VarianceChip target={rfq.targetPrice} quoted={rfq.submittedCost!} />
+                          : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          {rfq.status === 'responded' && (
+                            <button onClick={() => onViewResponse(rfq.orderId)}
+                              className="px-2.5 py-1 text-[10px] font-semibold text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 whitespace-nowrap">
+                              View
+                            </button>
+                          )}
+                          {(rfq.status === 'sent' || rfq.status === 'overdue') && (
+                            <button onClick={() => onFollowUp(rfq.id)}
+                              className="px-2.5 py-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 whitespace-nowrap">
+                              Follow Up
+                            </button>
+                          )}
+                          <button onClick={() => onCancel(rfq.id)}
+                            className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors" title="Cancel RFQ">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Purchase Orders Sub-Tab ──────────────────────────────────────────────────
+
+function POStatusBadge({ status }: { status: POStatus }) {
+  const map: Record<POStatus, { label: string; cls: string }> = {
+    requested:  { label: 'Requested',      cls: 'bg-amber-50 text-amber-700 border-amber-200'  },
+    pushing:    { label: 'Pushing to D365', cls: 'bg-blue-50 text-blue-700 border-blue-200'    },
+    'po-raised':{ label: 'PO Raised',       cls: 'bg-teal-50 text-teal-700 border-teal-200'    },
+    failed:     { label: 'Failed',          cls: 'bg-red-50 text-red-700 border-red-200'       },
+    complete:   { label: 'Complete',        cls: 'bg-green-50 text-green-700 border-green-200' },
+  }
+  const { label, cls } = map[status]
+  return (
+    <span className={cn('inline-flex items-center text-xs px-2 py-0.5 rounded-full border font-medium whitespace-nowrap', cls)}>
+      {label}
+    </span>
+  )
+}
+
+function ManualPOEntryModal({
+  po,
+  onClose,
+  onSave,
+}: {
+  po: PORecord
+  onClose: () => void
+  onSave: (poNumber: string, pdfName: string) => void
+}) {
+  const [poNum, setPoNum]   = useState('')
+  const [pdfName, setPdf]   = useState('')
+  const [saved, setSaved]   = useState(false)
+
+  const handleSave = () => {
+    if (!poNum.trim()) return
+    setSaved(true)
+    setTimeout(() => { onSave(poNum.trim(), pdfName.trim()); onClose() }, 900)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
+          <div>
+            <h2 className="font-bold text-slate-900">Manual PO Entry</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{po.styleCode} · {po.colour} · {po.whCode}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          {/* Failure reason */}
+          {po.failureReason && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-xs font-semibold text-red-700 mb-1">D365 Push Failed</p>
+              <p className="text-xs text-red-600 leading-relaxed">{po.failureReason}</p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">PO Number <span className="text-red-500">*</span></label>
+            <input
+              value={poNum} onChange={e => setPoNum(e.target.value)}
+              placeholder="e.g. PO-D365-26-10499"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">PDF File Name <span className="text-slate-400 font-normal">(optional)</span></label>
+            <input
+              value={pdfName} onChange={e => setPdf(e.target.value)}
+              placeholder="e.g. PO-D365-26-10499.pdf"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+            />
+            <p className="text-[11px] text-slate-400 mt-1">Upload the actual PDF in the document management system separately.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
+            <div>
+              <span className="font-medium text-slate-700">Vendor</span>
+              <p>{po.vendor} ({po.vendorCode})</p>
+            </div>
+            <div>
+              <span className="font-medium text-slate-700">Qty / Value</span>
+              <p>{po.totalQty} pcs · ₹{po.totalValue.toLocaleString('en-IN')}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-6 pb-5">
+          <button onClick={onClose} className="flex-1 px-4 py-2 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!poNum.trim() || saved}
+            className={cn(
+              'flex-1 px-4 py-2 rounded-xl text-sm font-semibold transition-colors',
+              saved
+                ? 'bg-green-600 text-white'
+                : poNum.trim()
+                  ? 'bg-violet-600 text-white hover:bg-violet-700 active:bg-violet-800'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+            )}>
+            {saved ? '✓ Saved' : 'Save PO Entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function POSubTab({
+  poRecords,
+  orders,
+  onRaisePO,
+  onUpdatePO,
+}: {
+  poRecords: PORecord[]
+  orders: CostingOrder[]
+  onRaisePO: (order: CostingOrder) => void
+  onUpdatePO: (id: string, patch: Partial<PORecord>) => void
+}) {
+  const [manualModal, setManualModal] = useState<PORecord | null>(null)
+  const [filterStatus, setFilterStatus] = useState<POStatus | 'all'>('all')
+
+  const total     = poRecords.length
+  const complete  = poRecords.filter(p => p.status === 'complete').length
+  const poRaised  = poRecords.filter(p => p.status === 'po-raised').length
+  const requested = poRecords.filter(p => p.status === 'requested' || p.status === 'pushing').length
+  const failed    = poRecords.filter(p => p.status === 'failed').length
+
+  const filtered = filterStatus === 'all'
+    ? poRecords
+    : poRecords.filter(p => {
+        if (filterStatus === 'requested') return p.status === 'requested' || p.status === 'pushing'
+        return p.status === filterStatus
+      })
+
+  // Styles that are approved but have no POs yet
+  const approvedWithNoPO = orders.filter(o =>
+    o.costStatus === 'approved' && !poRecords.some(p => p.subOrderId === o.id)
+  )
+
+  const handleManualSave = (po: PORecord, poNumber: string, pdfName: string) => {
+    onUpdatePO(po.id, {
+      poNumber,
+      status: pdfName ? 'complete' : 'po-raised',
+      manualPoEntry: true,
+      poCreatedDate: new Date().toISOString().split('T')[0],
+      ...(pdfName ? { pdfUrl: pdfName, pdfUploadedDate: new Date().toISOString().split('T')[0], pdfUploadedBy: 'Parthipan Kumar' } : {}),
+    })
+  }
+
+  const tiles = [
+    { label: 'Total',      count: total,     status: null as POStatus | null,    bg: 'bg-slate-50  border-slate-200', text: 'text-slate-700', dot: 'bg-slate-400' },
+    { label: 'Complete',   count: complete,  status: 'complete' as POStatus,     bg: 'bg-green-50  border-green-200', text: 'text-green-700', dot: 'bg-green-500' },
+    { label: 'PO Raised',  count: poRaised,  status: 'po-raised' as POStatus,    bg: 'bg-teal-50   border-teal-200',  text: 'text-teal-700',  dot: 'bg-teal-500'  },
+    { label: 'Requested',  count: requested, status: 'requested' as POStatus,    bg: 'bg-amber-50  border-amber-200', text: 'text-amber-700', dot: 'bg-amber-400' },
+    { label: 'Failed',     count: failed,    status: 'failed' as POStatus,       bg: 'bg-red-50    border-red-200',   text: 'text-red-700',   dot: 'bg-red-500'   },
+  ]
+
+  return (
+    <div>
+      {/* Summary tiles */}
+      <div className="grid grid-cols-5 gap-3 mb-5">
+        {tiles.map(({ label, count, status, bg, text, dot }) => {
+          const isActive = filterStatus === (status ?? 'all') || (status === null && filterStatus === 'all')
+          return (
+            <button
+              key={label}
+              onClick={() => setFilterStatus(isActive ? 'all' : (status ?? 'all'))}
+              className={cn(
+                'rounded-xl border p-4 text-left transition-all hover:shadow-sm',
+                bg,
+                isActive && 'ring-2 ring-offset-1 ring-slate-400'
+              )}>
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className={cn('w-2 h-2 rounded-full flex-shrink-0', dot)} />
+                <span className="text-xs font-medium text-slate-500">{label}</span>
+              </div>
+              <p className={cn('text-2xl font-black', text)}>{count}</p>
+              <p className="text-xs text-slate-400 mt-0.5">PO{count !== 1 ? 's' : ''}</p>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Approved orders awaiting PO */}
+      {approvedWithNoPO.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex items-start gap-3">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-800">{approvedWithNoPO.length} approved order{approvedWithNoPO.length !== 1 ? 's' : ''} pending PO</p>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {approvedWithNoPO.map(o => (
+                <button
+                  key={o.id}
+                  onClick={() => onRaisePO(o)}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-600 text-white text-xs font-semibold rounded-lg hover:bg-amber-700 transition-colors">
+                  <Package className="w-3 h-3" />
+                  {o.styleCode} · {o.colour}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter active indicator */}
+      {filterStatus !== 'all' && (
+        <div className="flex items-center gap-2 mb-4">
+          <POStatusBadge status={filterStatus as POStatus} />
+          <button onClick={() => setFilterStatus('all')} className="text-xs text-slate-400 hover:text-slate-600 underline">Clear</button>
+          <span className="ml-auto text-xs text-slate-400">{filtered.length} PO{filtered.length !== 1 ? 's' : ''}</span>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50/60">
+                {['STYLE', 'COLOUR', 'VENDOR', 'WAREHOUSE', 'QTY', 'VALUE', 'DELIVERY', 'STATUS', 'PO NUMBER', ''].map(h => (
+                  <th key={h} className="px-4 pt-2.5 pb-1 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">
+                    No purchase orders matching this filter.
+                  </td>
+                </tr>
+              )}
+              {filtered.map(po => {
+                const wh = getWH(po.whCode)
+                const deliveryDate = new Date(po.deliveryDate)
+                const today = new Date()
+                const daysToDelivery = Math.ceil((deliveryDate.getTime() - today.getTime()) / 86400000)
+                const isLate = daysToDelivery < 0
+
+                return (
+                  <tr key={po.id} className={cn(
+                    'transition-colors hover:bg-slate-50/50',
+                    po.status === 'failed' && 'bg-red-50/30'
+                  )}>
+                    {/* Style */}
+                    <td className="px-4 py-3 min-w-[160px]">
+                      <p className="text-sm font-semibold text-slate-800">{po.styleCode}</p>
+                      <p className="text-xs text-slate-500 mt-0.5 leading-tight">{po.styleName}</p>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">{po.subOrderId}</p>
+                    </td>
+
+                    {/* Colour */}
+                    <td className="px-4 py-3 text-xs font-medium text-slate-700 whitespace-nowrap">{po.colour}</td>
+
+                    {/* Vendor */}
+                    <td className="px-4 py-3 min-w-[140px]">
+                      <p className="text-xs font-semibold text-slate-800">{po.vendor}</p>
+                      <p className="text-[10px] font-mono text-slate-400 mt-0.5">{po.vendorCode}</p>
+                    </td>
+
+                    {/* Warehouse */}
+                    <td className="px-4 py-3 min-w-[140px]">
+                      <p className="text-xs font-semibold text-slate-700">{wh?.city ?? po.whCode}</p>
+                      <p className="text-[10px] font-mono text-slate-400 mt-0.5">{po.whCode}</p>
+                    </td>
+
+                    {/* Qty */}
+                    <td className="px-4 py-3 text-sm font-semibold text-slate-800 whitespace-nowrap">
+                      {po.totalQty.toLocaleString('en-IN')}
+                    </td>
+
+                    {/* Value */}
+                    <td className="px-4 py-3 text-sm font-semibold text-slate-800 whitespace-nowrap">
+                      ₹{po.totalValue.toLocaleString('en-IN')}
+                    </td>
+
+                    {/* Delivery */}
+                    <td className="px-4 py-3 min-w-[100px]">
+                      <p className="text-xs font-medium text-slate-700">
+                        {deliveryDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                      </p>
+                      {isLate ? (
+                        <p className="text-[10px] font-semibold text-red-600 mt-0.5">{Math.abs(daysToDelivery)}d overdue</p>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 mt-0.5">in {daysToDelivery}d</p>
+                      )}
+                    </td>
+
+                    {/* Status */}
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <POStatusBadge status={po.status} />
+                        {po.status === 'failed' && (
+                          <p className="text-[10px] text-red-600 leading-tight max-w-[140px]">
+                            {po.pushAttempts ?? 1} attempt{(po.pushAttempts ?? 1) > 1 ? 's' : ''}
+                          </p>
+                        )}
+                        {po.poCreatedDate && (
+                          <p className="text-[10px] text-slate-400">
+                            {new Date(po.poCreatedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            {po.d365PushedBy && ` · ${po.d365PushedBy.split(' ')[0]}`}
+                          </p>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* PO Number */}
+                    <td className="px-4 py-3 min-w-[170px]">
+                      {po.poNumber ? (
+                        <div>
+                          <p className="text-xs font-mono font-semibold text-slate-800">{po.poNumber}</p>
+                          {po.pdfUrl ? (
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <Check className="w-2.5 h-2.5 text-green-600 flex-shrink-0" />
+                              <span className="text-[10px] text-green-700 font-medium">PDF attached</span>
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-amber-600 mt-0.5">PDF pending</p>
+                          )}
+                          {po.manualPoEntry && (
+                            <span className="inline-block text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mt-0.5">manual</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">
+                          {po.status === 'failed' ? '—' : 'Pending from MIS'}
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        {po.status === 'failed' && (
+                          <button
+                            onClick={() => setManualModal(po)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors whitespace-nowrap">
+                            <Edit2 className="w-3 h-3" /> Manual Entry
+                          </button>
+                        )}
+                        {po.status === 'po-raised' && !po.pdfUrl && (
+                          <button
+                            onClick={() => setManualModal(po)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors whitespace-nowrap">
+                            <Upload className="w-3 h-3" /> Attach PDF
+                          </button>
+                        )}
+                        {po.status === 'complete' && (
+                          <span className="flex items-center gap-1 text-[10px] text-green-600 font-semibold">
+                            <CheckCircle2 className="w-3 h-3" /> Done
+                          </span>
+                        )}
+                        {po.status === 'requested' && (
+                          <span className="text-[10px] text-amber-600 font-medium whitespace-nowrap">Awaiting MIS</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer summary */}
+        {filtered.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              {filtered.length} PO{filtered.length !== 1 ? 's' : ''} ·{' '}
+              {filtered.reduce((s, p) => s + p.totalQty, 0).toLocaleString('en-IN')} pcs ·{' '}
+              ₹{filtered.reduce((s, p) => s + p.totalValue, 0).toLocaleString('en-IN')} total value
+            </p>
+            <p className="text-xs text-slate-400">
+              Requested {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Manual PO Entry Modal */}
+      {manualModal && (
+        <ManualPOEntryModal
+          po={manualModal}
+          onClose={() => setManualModal(null)}
+          onSave={(poNumber, pdfName) => {
+            handleManualSave(manualModal, poNumber, pdfName)
+            setManualModal(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Bulk Costing Update Sub-Tab ──────────────────────────────────────────────
+
+type BulkRowDraft = {
+  vendorId:              string
+  // 11 individual OpenCostingBreakdown fields
+  mainFabricPrice:       string
+  mainFabricConsumption: string
+  trimFabricPrice:       string
+  trimFabricConsumption: string
+  trimCostThread:        string
+  cmp:                   string
+  valueAddition:         string
+  testing:               string
+  logistic:              string
+  rejectionPct:          string
+  marginPct:             string
+  // Final quoted (auto-computed or manually set)
+  quoted:                string
+  notes:                 string
+  isDirty:               boolean
+  isRecalculated:        boolean
+}
+
+const BREAKDOWN_FIELDS: (keyof BulkRowDraft)[] = [
+  'mainFabricPrice', 'mainFabricConsumption',
+  'trimFabricPrice', 'trimFabricConsumption',
+  'trimCostThread', 'cmp', 'valueAddition',
+  'testing', 'logistic', 'rejectionPct', 'marginPct',
+]
+
+function initBulkDraft(order: CostingOrder): BulkRowDraft {
+  const b = order.breakdown
+  return {
+    vendorId:              order.vendorId ?? '',
+    mainFabricPrice:       b ? String(b.mainFabricPrice)       : '',
+    mainFabricConsumption: b ? String(b.mainFabricConsumption) : '',
+    trimFabricPrice:       b ? String(b.trimFabricPrice)       : '',
+    trimFabricConsumption: b ? String(b.trimFabricConsumption) : '',
+    trimCostThread:        b ? String(b.trimCostThread)        : '',
+    cmp:                   b ? String(b.cmp)                   : '',
+    valueAddition:         b ? String(b.valueAddition)         : '',
+    testing:               b ? String(b.testing)               : '',
+    logistic:              b ? String(b.logistic)              : '',
+    rejectionPct:          b ? String(b.rejectionPct)          : '',
+    marginPct:             b ? String(b.marginPct)             : '',
+    quoted:                order.submittedCost != null ? String(order.submittedCost) : '',
+    notes:                 order.notes ?? '',
+    isDirty:               false,
+    isRecalculated:        false,
+  }
+}
+
+function recomputeQuotedFromDraft(draft: BulkRowDraft): string {
+  const p = (v: string) => parseFloat(v) || 0
+  const b: OpenCostingBreakdown = {
+    mainFabricPrice:       p(draft.mainFabricPrice),
+    mainFabricConsumption: p(draft.mainFabricConsumption),
+    trimFabricPrice:       p(draft.trimFabricPrice),
+    trimFabricConsumption: p(draft.trimFabricConsumption),
+    trimCostThread:        p(draft.trimCostThread),
+    cmp:                   p(draft.cmp),
+    valueAddition:         p(draft.valueAddition),
+    testing:               p(draft.testing),
+    logistic:              p(draft.logistic),
+    rejectionPct:          p(draft.rejectionPct),
+    marginPct:             p(draft.marginPct),
+  }
+  const { openCostingTotal } = deriveOpenCostingTotals(b)
+  return openCostingTotal > 0 ? String(openCostingTotal) : ''
+}
+
+function BulkCostingTab({
+  orders,
+  vendors,
+  onUpdateOrder,
+  onApprove,
+  onReject,
+  onOpenSplit,
+  onDeleteChild,
+}: {
+  orders: CostingOrder[]
+  vendors: { id: string; name: string; location?: string | null }[]
+  onUpdateOrder: (id: string, patch: Partial<CostingOrder>) => void
+  onApprove: (id: string) => void
+  onReject: (id: string, reason: string) => void
+  onOpenSplit: (orderId: string) => void
+  onDeleteChild: (childId: string, parentId: string) => void
+}) {
+  const [drafts, setDrafts]                         = useState<Record<string, BulkRowDraft>>({})
+  const [selected, setSelected]                     = useState<Set<string>>(new Set())
+  const [filterStatus, setFilterStatus]             = useState<CostStatus | 'all'>('all')
+  const [activeVendorPicker, setActiveVendorPicker] = useState<string | null>(null)
+  const [vendorSearch, setVendorSearch]             = useState('')
+  const [rejectingRow, setRejectingRow]             = useState<string | null>(null)
+  const [bulkRejectOpen, setBulkRejectOpen]         = useState(false)
+  const [rejectReason, setRejectReason]             = useState('')
+  const vendorPickerRef = useRef<HTMLDivElement>(null)
+
+  const getDraft = useCallback((order: CostingOrder) =>
+    drafts[order.id] ?? initBulkDraft(order), [drafts])
+
+  const updateDraft = (orderId: string, order: CostingOrder, field: keyof BulkRowDraft, value: string) => {
+    const cur = drafts[orderId] ?? initBulkDraft(order)
+    const updated: BulkRowDraft = { ...cur, [field]: value, isDirty: true }
+    if (BREAKDOWN_FIELDS.includes(field as keyof BulkRowDraft)) {
+      updated.quoted         = recomputeQuotedFromDraft(updated)
+      updated.isRecalculated = true
+    }
+    if (field === 'quoted') updated.isRecalculated = false
+    setDrafts(prev => ({ ...prev, [orderId]: updated }))
+  }
+
+  const dismissRecalc = (orderId: string, order: CostingOrder) =>
+    setDrafts(prev => ({
+      ...prev,
+      [orderId]: { ...(prev[orderId] ?? initBulkDraft(order)), isRecalculated: false },
+    }))
+
+  const assignVendor = (orderId: string, order: CostingOrder, vendorId: string) => {
+    const cur = drafts[orderId] ?? initBulkDraft(order)
+    setDrafts(prev => ({ ...prev, [orderId]: { ...cur, vendorId, isDirty: true } }))
+    setActiveVendorPicker(null); setVendorSearch('')
+  }
+
+  const dirtyCount = Object.values(drafts).filter(d => d.isDirty).length
+
+  const saveAll = () => {
+    Object.entries(drafts).forEach(([orderId, draft]) => {
+      if (!draft.isDirty) return
+      const order = orders.find(o => o.id === orderId)
+      if (!order) return
+      const v   = vendors.find(vv => vv.id === draft.vendorId)
+      const p   = (x: string) => parseFloat(x) || 0
+      const hasBreakdown = p(draft.mainFabricPrice) > 0 || p(draft.cmp) > 0 || p(draft.trimCostThread) > 0
+
+      const breakdown: OpenCostingBreakdown | undefined = hasBreakdown ? {
+        mainFabricPrice:       p(draft.mainFabricPrice),
+        mainFabricConsumption: p(draft.mainFabricConsumption),
+        trimFabricPrice:       p(draft.trimFabricPrice),
+        trimFabricConsumption: p(draft.trimFabricConsumption),
+        trimCostThread:        p(draft.trimCostThread),
+        cmp:                   p(draft.cmp),
+        valueAddition:         p(draft.valueAddition),
+        testing:               p(draft.testing),
+        logistic:              p(draft.logistic),
+        rejectionPct:          p(draft.rejectionPct),
+        marginPct:             p(draft.marginPct),
+      } : order.breakdown
+
+      const quotedCost  = p(draft.quoted) || undefined
+      const newVendorId = draft.vendorId || order.vendorId
+      const newStatus: CostStatus | undefined =
+        (newVendorId && newVendorId !== order.vendorId && order.costStatus === 'no-vendor') ? 'pending' :
+        (quotedCost && quotedCost !== order.submittedCost && (order.costStatus === 'pending' || order.costStatus === 'rejected')) ? 'submitted' :
+        undefined
+
+      const patch: Partial<CostingOrder> = {
+        ...(draft.notes !== (order.notes ?? '')           ? { notes: draft.notes } : {}),
+        ...(quotedCost !== order.submittedCost            ? { submittedCost: quotedCost, submittedOn: new Date().toISOString().split('T')[0] } : {}),
+        ...(hasBreakdown && breakdown !== order.breakdown ? { breakdown } : {}),
+        ...(newVendorId && newVendorId !== order.vendorId && v ? { vendorId: newVendorId, vendor: v.name, vendorLocation: v.location ?? '' } : {}),
+        ...(newStatus ? { costStatus: newStatus } : {}),
+      }
+      if (Object.keys(patch).length > 0) onUpdateOrder(orderId, patch)
+    })
+    setDrafts({})
+  }
+
+  // Parents first, then their children
+  const allOrders = useMemo(() => {
+    const parents = orders.filter(o => !o.parentId)
+    const result: CostingOrder[] = []
+    parents.forEach(p => {
+      result.push(p)
+      orders.filter(o => o.parentId === p.id).forEach(c => result.push(c))
+    })
+    return result
+  }, [orders])
+
+  const filtered = useMemo(() =>
+    filterStatus === 'all' ? allOrders : allOrders.filter(o => o.costStatus === filterStatus)
+  , [allOrders, filterStatus])
+
+  const statusCounts = useMemo(() => {
+    const c: Partial<Record<CostStatus, number>> = {}
+    orders.forEach(o => { c[o.costStatus] = (c[o.costStatus] ?? 0) + 1 })
+    return c
+  }, [orders])
+
+  const allSelected = filtered.length > 0 && filtered.every(o => selected.has(o.id))
+
+  const filteredVendors = vendors.filter(v =>
+    v.name.toLowerCase().includes(vendorSearch.toLowerCase()) ||
+    (v.location ?? '').toLowerCase().includes(vendorSearch.toLowerCase())
+  )
+
+  useEffect(() => {
+    if (!activeVendorPicker) return
+    const h = (e: MouseEvent) => {
+      if (vendorPickerRef.current && !vendorPickerRef.current.contains(e.target as Node)) {
+        setActiveVendorPicker(null); setVendorSearch('')
+      }
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [activeVendorPicker])
+
+  // Tiny inline input helper
+  const NumInput = ({ val, onChange, w = 'w-14' }: { val: string; onChange: (v: string) => void; w?: string }) => (
+    <input type="number" value={val} onChange={e => onChange(e.target.value)} placeholder="—"
+      className={`${w} text-xs text-slate-700 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-violet-400 focus:outline-none py-0.5 transition-colors`} />
+  )
+
+  const filterOptions: [CostStatus | 'all', string][] = [
+    ['all', 'All'], ['no-vendor', 'No Vendor'], ['pending', 'Pending'],
+    ['submitted', 'Submitted'], ['approved', 'Approved'], ['escalated', 'Escalated'], ['rejected', 'Rejected'],
+  ]
+
+  const COL_HEADERS = [
+    ['STYLE',           'min-w-[180px]'],
+    ['COLOUR',          'whitespace-nowrap'],
+    ['VENDOR',          'min-w-[160px]'],
+    ['QTY',             'text-right'],
+    ['TARGET',          ''],
+    ['QUOTED ₹',        'min-w-[120px]'],
+    ['VARIANCE',        ''],
+    ['MF ₹/m',          ''],   // mainFabricPrice
+    ['MF m',            ''],   // mainFabricConsumption
+    ['TF ₹/m',          ''],   // trimFabricPrice
+    ['TF m',            ''],   // trimFabricConsumption
+    ['TRIM+THR ₹',      ''],   // trimCostThread
+    ['CMP ₹',           ''],   // cmp
+    ['VALUE ADD ₹',     ''],   // valueAddition
+    ['TESTING ₹',       ''],   // testing
+    ['LOGISTIC ₹',      ''],   // logistic
+    ['REJ %',           ''],   // rejectionPct
+    ['MARGIN %',        ''],   // marginPct
+    ['STATUS',          ''],
+    ['NOTES',           'min-w-[160px]'],
+    ['',                'w-16'],
+  ] as [string, string][]
+
+  return (
+    <div>
+      {/* Filter chips + save bar */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex gap-1.5 flex-wrap">
+          {filterOptions.map(([key, label]) => {
+            const count = key === 'all' ? orders.length : (statusCounts[key as CostStatus] ?? 0)
+            return (
+              <button key={key} onClick={() => setFilterStatus(key)}
+                className={cn('px-3 py-1 rounded-full text-xs font-medium transition-colors border',
+                  filterStatus === key
+                    ? 'bg-slate-800 text-white border-slate-800'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}>
+                {label}{count > 0 && <span className="ml-1 opacity-60">{count}</span>}
+              </button>
+            )
+          })}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {dirtyCount > 0 && (
+            <>
+              <button onClick={() => setDrafts({})} className="text-xs text-slate-400 hover:text-slate-600 underline">Discard all</button>
+              <button onClick={saveAll}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors shadow-sm">
+                <Check className="w-3.5 h-3.5" />
+                Save {dirtyCount} change{dirtyCount !== 1 ? 's' : ''}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-xl mb-4">
+          <span className="text-sm font-semibold text-violet-800">{selected.size} selected</span>
+          <div className="flex items-center gap-2 ml-2">
+            <button onClick={() => { selected.forEach(id => { const o = orders.find(oo => oo.id === id); if (o?.costStatus === 'submitted' || o?.costStatus === 'escalated') onApprove(id) }); setSelected(new Set()) }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 transition-colors">
+              <Check className="w-3 h-3" /> Approve
+            </button>
+            <button onClick={() => setBulkRejectOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors">
+              <X className="w-3 h-3" /> Reject
+            </button>
+          </div>
+          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-violet-400 hover:text-violet-600 underline">Clear</button>
+        </div>
+      )}
+
+      {/* Global recalculation notice */}
+      {Object.values(drafts).some(d => d.isRecalculated) && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl mb-4">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <p className="text-xs text-amber-800 font-medium">
+            Some quoted prices were auto-updated from breakdown edits — review the highlighted rows before saving.
+          </p>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50/60">
+                <th className="px-3 py-2 w-8">
+                  <input type="checkbox" checked={allSelected}
+                    onChange={() => allSelected ? setSelected(new Set()) : setSelected(new Set(filtered.map(o => o.id)))}
+                    className="w-3.5 h-3.5 rounded border-slate-300 accent-violet-600" />
+                </th>
+                {COL_HEADERS.map(([h, extra]) => (
+                  <th key={h} className={cn('px-3 pt-2.5 pb-1 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap', extra)}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+              {/* Column group hint row */}
+              <tr className="border-b border-slate-100 bg-slate-50/30">
+                <td /><td /><td /><td /><td /><td />
+                <td />
+                <td colSpan={2} className="px-3 py-0.5 text-[9px] text-slate-400 font-medium tracking-wide border-l border-slate-100">MAIN FABRIC</td>
+                <td colSpan={2} className="px-3 py-0.5 text-[9px] text-slate-400 font-medium tracking-wide border-l border-slate-100">TRIM FABRIC</td>
+                <td colSpan={3} className="px-3 py-0.5 text-[9px] text-slate-400 font-medium tracking-wide border-l border-slate-100">PROCESSING</td>
+                <td colSpan={2} className="px-3 py-0.5 text-[9px] text-slate-400 font-medium tracking-wide border-l border-slate-100">OVERHEADS</td>
+                <td colSpan={2} className="px-3 py-0.5 text-[9px] text-slate-400 font-medium tracking-wide border-l border-slate-100">%</td>
+                <td /><td /><td />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {filtered.length === 0 && (
+                <tr><td colSpan={22} className="px-4 py-10 text-center text-sm text-slate-400">No orders matching this filter.</td></tr>
+              )}
+              {filtered.map(order => {
+                const draft      = getDraft(order)
+                const isChild    = !!order.parentId
+                const isSplitParent = order.isSplit === true
+                const canSplit   = !isChild && !isSplitParent
+                const canDelete  = isChild && order.costStatus !== 'approved'
+                const quotedNum  = parseFloat(draft.quoted)
+                const variance   = !isNaN(quotedNum) && quotedNum > 0 && order.targetPrice
+                  ? ((quotedNum - order.targetPrice) / order.targetPrice) * 100
+                  : null
+                const currentVendor = vendors.find(v => v.id === draft.vendorId)
+                const childCount = isSplitParent
+                  ? orders.filter(o => o.parentId === order.id).length
+                  : 0
+
+                // Locked cell (for split parents)
+                const LockedCell = ({ span = 1 }: { span?: number }) => (
+                  <td colSpan={span} className="px-3 py-2.5">
+                    <span className="text-[10px] text-slate-300">—</span>
+                  </td>
+                )
+
+                return (
+                  <tr key={order.id} className={cn(
+                    'group transition-colors',
+                    draft.isDirty ? 'bg-amber-50/40' : 'hover:bg-slate-50/50',
+                    isChild && 'bg-slate-50/20',
+                    isSplitParent && 'bg-violet-50/20',
+                  )}>
+                    {/* Checkbox */}
+                    <td className="px-3 py-2.5">
+                      <input type="checkbox" checked={selected.has(order.id)}
+                        onChange={e => { const next = new Set(selected); e.target.checked ? next.add(order.id) : next.delete(order.id); setSelected(next) }}
+                        className="w-3.5 h-3.5 rounded border-slate-300 accent-violet-600" />
+                    </td>
+
+                    {/* Style */}
+                    <td className="px-3 py-2.5">
+                      <div className={cn('flex items-start gap-1.5', isChild && 'ml-5 pl-2.5 border-l-2 border-violet-200')}>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="text-xs font-semibold text-slate-800">{order.styleCode}</p>
+                            {isSplitParent && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] bg-violet-100 text-violet-700 border border-violet-200 px-1 py-0.5 rounded font-bold leading-none">
+                                <GitBranch className="w-2 h-2" /> SPLIT {childCount}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[150px]">{order.styleName}</p>
+                          <p className="text-[10px] font-mono text-slate-400">{order.id}</p>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Colour */}
+                    <td className="px-3 py-2.5 text-xs font-medium text-slate-700 whitespace-nowrap">{order.colour}</td>
+
+                    {/* Vendor — locked for split parents */}
+                    <td className="px-3 py-2.5 relative">
+                      {isSplitParent ? (
+                        <p className="text-[10px] text-slate-400 italic">See child rows</p>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => { setActiveVendorPicker(order.id); setVendorSearch('') }}
+                            className={cn('w-full text-left px-2 py-1.5 rounded-lg border transition-colors',
+                              draft.vendorId
+                                ? 'border-transparent hover:border-slate-200 hover:bg-slate-50'
+                                : 'border-dashed border-amber-300 bg-amber-50 hover:bg-amber-100')}>
+                            {currentVendor ? (
+                              <>
+                                <p className="text-xs font-semibold text-slate-800 truncate max-w-[130px]">{currentVendor.name}</p>
+                                <p className="text-[10px] text-slate-400">{currentVendor.location}</p>
+                              </>
+                            ) : (
+                              <p className="text-xs text-amber-600 font-medium">+ Assign vendor</p>
+                            )}
+                          </button>
+                          {activeVendorPicker === order.id && (
+                            <div ref={vendorPickerRef} className="absolute top-full left-0 z-30 mt-1 w-56 bg-white border border-slate-200 rounded-xl shadow-2xl">
+                              <div className="p-2 border-b border-slate-100">
+                                <input autoFocus value={vendorSearch} onChange={e => setVendorSearch(e.target.value)}
+                                  placeholder="Search vendors…"
+                                  className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                              </div>
+                              <div className="max-h-44 overflow-y-auto py-1">
+                                {filteredVendors.length === 0
+                                  ? <p className="text-xs text-slate-400 px-3 py-2">No vendors found</p>
+                                  : filteredVendors.map(v => (
+                                      <button key={v.id} onClick={() => assignVendor(order.id, order, v.id)}
+                                        className="w-full text-left px-3 py-2 hover:bg-violet-50 transition-colors">
+                                        <p className="text-xs font-semibold text-slate-800">{v.name}</p>
+                                        <p className="text-[10px] text-slate-400">{v.location}</p>
+                                      </button>
+                                    ))
+                                }
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </td>
+
+                    {/* QTY */}
+                    <td className="px-3 py-2.5 text-xs font-semibold text-slate-700 text-right whitespace-nowrap">
+                      {order.orderQty.toLocaleString('en-IN')}
+                    </td>
+
+                    {/* Target */}
+                    <td className="px-3 py-2.5 text-xs font-semibold text-slate-600 whitespace-nowrap">₹{order.targetPrice}</td>
+
+                    {/* ═══ LOCKED FOR SPLIT PARENTS ═══ */}
+                    {isSplitParent ? (
+                      <LockedCell span={14} />
+                    ) : (
+                      <>
+                        {/* Quoted ₹ — with recalculated indicator */}
+                        <td className="px-3 py-2.5">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-0.5">
+                              <span className="text-[10px] text-slate-400">₹</span>
+                              <input type="number" value={draft.quoted}
+                                onChange={e => updateDraft(order.id, order, 'quoted', e.target.value)}
+                                placeholder="—"
+                                className={cn('w-20 text-xs font-semibold bg-transparent border-b py-0.5 focus:outline-none transition-colors',
+                                  draft.isRecalculated
+                                    ? 'text-amber-700 border-amber-400'
+                                    : 'text-slate-800 border-transparent hover:border-slate-300 focus:border-violet-400')} />
+                            </div>
+                            {draft.isRecalculated && (
+                              <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 w-fit">
+                                <span className="text-[9px] text-amber-700 font-semibold whitespace-nowrap">↻ Auto-updated</span>
+                                <button onClick={() => dismissRecalc(order.id, order)}
+                                  className="text-[9px] text-amber-500 hover:text-amber-800 underline ml-0.5 whitespace-nowrap">OK</button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Variance */}
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {variance !== null ? (
+                            <span className={cn('inline-flex items-center gap-0.5 text-xs font-semibold',
+                              variance > 0 ? 'text-red-600' : variance < 0 ? 'text-green-600' : 'text-slate-500')}>
+                              {variance > 0 ? <TrendingUp className="w-3 h-3" /> : variance < 0 ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+                              {Math.abs(variance).toFixed(1)}%
+                            </span>
+                          ) : <span className="text-xs text-slate-300">—</span>}
+                        </td>
+
+                        {/* Main Fabric Price */}
+                        <td className="px-3 py-2.5 border-l border-slate-100">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.mainFabricPrice} onChange={v => updateDraft(order.id, order, 'mainFabricPrice', v)} />
+                          </div>
+                        </td>
+                        {/* Main Fabric Consumption */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5">
+                            <NumInput val={draft.mainFabricConsumption} onChange={v => updateDraft(order.id, order, 'mainFabricConsumption', v)} />
+                            <span className="text-[10px] text-slate-400">m</span>
+                          </div>
+                        </td>
+                        {/* Trim Fabric Price */}
+                        <td className="px-3 py-2.5 border-l border-slate-100">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.trimFabricPrice} onChange={v => updateDraft(order.id, order, 'trimFabricPrice', v)} />
+                          </div>
+                        </td>
+                        {/* Trim Fabric Consumption */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5">
+                            <NumInput val={draft.trimFabricConsumption} onChange={v => updateDraft(order.id, order, 'trimFabricConsumption', v)} />
+                            <span className="text-[10px] text-slate-400">m</span>
+                          </div>
+                        </td>
+                        {/* Trim+Thread */}
+                        <td className="px-3 py-2.5 border-l border-slate-100">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.trimCostThread} onChange={v => updateDraft(order.id, order, 'trimCostThread', v)} />
+                          </div>
+                        </td>
+                        {/* CMP */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.cmp} onChange={v => updateDraft(order.id, order, 'cmp', v)} />
+                          </div>
+                        </td>
+                        {/* Value Addition */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.valueAddition} onChange={v => updateDraft(order.id, order, 'valueAddition', v)} />
+                          </div>
+                        </td>
+                        {/* Testing */}
+                        <td className="px-3 py-2.5 border-l border-slate-100">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.testing} onChange={v => updateDraft(order.id, order, 'testing', v)} />
+                          </div>
+                        </td>
+                        {/* Logistic */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5"><span className="text-[10px] text-slate-400">₹</span>
+                            <NumInput val={draft.logistic} onChange={v => updateDraft(order.id, order, 'logistic', v)} />
+                          </div>
+                        </td>
+                        {/* Rejection % */}
+                        <td className="px-3 py-2.5 border-l border-slate-100">
+                          <div className="flex items-center gap-0.5">
+                            <NumInput val={draft.rejectionPct} onChange={v => updateDraft(order.id, order, 'rejectionPct', v)} w="w-10" />
+                            <span className="text-[10px] text-slate-400">%</span>
+                          </div>
+                        </td>
+                        {/* Margin % */}
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-0.5">
+                            <NumInput val={draft.marginPct} onChange={v => updateDraft(order.id, order, 'marginPct', v)} w="w-10" />
+                            <span className="text-[10px] text-slate-400">%</span>
+                          </div>
+                        </td>
+                      </>
+                    )}
+
+                    {/* Status */}
+                    <td className="px-3 py-2.5"><CostStatusBadge status={order.costStatus} /></td>
+
+                    {/* Notes */}
+                    <td className="px-3 py-2.5">
+                      {isSplitParent ? (
+                        <span className="text-[10px] text-slate-300">—</span>
+                      ) : (
+                        <input type="text" value={draft.notes}
+                          onChange={e => updateDraft(order.id, order, 'notes', e.target.value)}
+                          placeholder="Add note…"
+                          className="w-full text-xs text-slate-700 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-violet-400 focus:outline-none py-0.5 transition-colors placeholder:text-slate-300" />
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-1">
+                        {/* Split parent: re-split button always visible */}
+                        {isSplitParent && (
+                          <button onClick={() => onOpenSplit(order.id)} title="Re-split order"
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-violet-100 text-violet-700 hover:bg-violet-200 text-[10px] font-semibold transition-colors">
+                            <Scissors className="w-3 h-3" /> Re-split
+                          </button>
+                        )}
+                        {/* Child: delete button */}
+                        {canDelete && (
+                          <button onClick={() => onDeleteChild(order.id, order.parentId!)} title="Remove child order"
+                            className="p-1 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors opacity-0 group-hover:opacity-100">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {/* Normal row: approve/reject/split actions */}
+                        {!isSplitParent && !isChild && (
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (
+                              <>
+                                <button onClick={() => onApprove(order.id)} title="Approve"
+                                  className="p-1 rounded bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
+                                  <Check className="w-3 h-3" />
+                                </button>
+                                <button onClick={() => { setRejectingRow(order.id); setRejectReason('') }} title="Reject"
+                                  className="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                            {canSplit && (
+                              <button onClick={() => onOpenSplit(order.id)} title="Split order"
+                                className="p-1 rounded bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors">
+                                <Scissors className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* Child: approve/reject (costing level) */}
+                        {isChild && !canDelete && (
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (
+                              <>
+                                <button onClick={() => onApprove(order.id)} title="Approve"
+                                  className="p-1 rounded bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
+                                  <Check className="w-3 h-3" />
+                                </button>
+                                <button onClick={() => { setRejectingRow(order.id); setRejectReason('') }} title="Reject"
+                                  className="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer */}
+        {filtered.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              {filtered.length} order{filtered.length !== 1 ? 's' : ''} · {filtered.reduce((s, o) => s + o.orderQty, 0).toLocaleString('en-IN')} pcs
+            </p>
+            {dirtyCount > 0 && (
+              <p className="text-xs text-amber-600 font-semibold">{dirtyCount} unsaved change{dirtyCount !== 1 ? 's' : ''}</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Per-row reject modal */}
+      {rejectingRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setRejectingRow(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 mb-3">Reject Costing</h3>
+            <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+              placeholder="Reason for rejection…" rows={3}
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none" />
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setRejectingRow(null)} className="flex-1 py-2 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={() => { onReject(rejectingRow, rejectReason); setRejectingRow(null); setRejectReason('') }}
+                disabled={!rejectReason.trim()}
+                className={cn('flex-1 py-2 rounded-xl text-sm font-semibold', rejectReason.trim() ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed')}>
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk reject modal */}
+      {bulkRejectOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setBulkRejectOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 mb-1">Reject {selected.size} orders</h3>
+            <p className="text-xs text-slate-400 mb-3">One rejection reason applied to all selected orders.</p>
+            <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+              placeholder="Reason for rejection…" rows={3}
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none" />
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setBulkRejectOpen(false)} className="flex-1 py-2 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button onClick={() => { selected.forEach(id => { const o = orders.find(oo => oo.id === id); if (o?.costStatus === 'submitted' || o?.costStatus === 'escalated') onReject(id, rejectReason) }); setBulkRejectOpen(false); setRejectReason(''); setSelected(new Set()) }}
+                disabled={!rejectReason.trim()}
+                className={cn('flex-1 py-2 rounded-xl text-sm font-semibold', rejectReason.trim() ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed')}>
+                Reject All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 // ─── Costing View ─────────────────────────────────────────────────────────────
 
 // Merge unassigned vendor-assignment orders into the costing list so POC can
 // assign a vendor and submit a quote in a single step from this panel.
-const MERGED_COSTING_ORDERS: CostingOrder[] = [
-  ...INITIAL_COSTING_ORDERS,
-  ...PENDING_ASSIGN_ORDERS
-    .filter(o => o.assignments.length === 0)
+function CostingView() {
+  const { data: vendors } = useVendors()
+  const { orders: storeOrders, rfqs, updateOrder, addOrders, removeOrders, sendRFQ: storeSendRFQ, updateRFQ, cancelRFQ, followUpRFQ, vendorSubmitRFQ } = useCostingStore()
+
+  // Merge store orders with pending-assign orders that have no vendor yet
+  const pendingAssignNoVendor: CostingOrder[] = PENDING_ASSIGN_ORDERS
+    .filter(o => o.assignments.length === 0 && !storeOrders.some(so => so.id === o.id))
     .map(o => ({
       id: o.id, styleCode: o.styleCode, styleName: o.styleName,
       colour: o.colour, category: o.category,
       vendor: '', vendorLocation: '', vendorId: '',
       orderQty: o.orderQty, targetPrice: o.targetPrice,
       costStatus: 'no-vendor' as CostStatus,
-      // PendingAssignOrder only carries one date — use it as both until POC sets the real split
       buyingExpectedDate: o.inwardDate, vendorTargetDate: o.inwardDate,
       season: o.season,
-    })),
-]
+    }))
+  const orders = [...storeOrders, ...pendingAssignNoVendor]
 
-function CostingView() {
-  const { data: vendors } = useVendors()
-
-  const [orders, setOrders]                 = useState<CostingOrder[]>(MERGED_COSTING_ORDERS)
   const [activeModal, setActiveModal]       = useState<string | null>(null)
   const [approvalModal, setApprovalModal]   = useState<string | null>(null)
   const [confirmDateModal, setConfirmDateModal] = useState<string | null>(null)
+  const [splitModal, setSplitModal]         = useState<string | null>(null)
   const [filterStatus, setFilterStatus]     = useState<CostStatus | 'all'>('all')
   const [expandedRow, setExpandedRow]       = useState<string | null>(null)
   const [savedToast, setSavedToast]         = useState<string | false>(false)
   const [poRecords, setPoRecords]           = useState<PORecord[]>(INITIAL_PO_RECORDS)
   const [poModalOrder, setPoModalOrder]     = useState<CostingOrder | null>(null)
+  const [costSubTab, setCostSubTab]         = useState<'orders' | 'rfq' | 'po' | 'bulk'>('orders')
+  const [sendRFQModal, setSendRFQModal]     = useState<string | null | undefined>(undefined)
 
   const toast = (msg: string) => { setSavedToast(msg); setTimeout(() => setSavedToast(false), 3000) }
 
-  const handleApprove = (orderId: string, notes: string) => {
-    setOrders(prev => prev.map(o => o.id !== orderId ? o : {
-      ...o,
-      costStatus: 'approved',
-      approvedBy: 'Parthipan Kumar',
-      approvedOn: new Date().toISOString().split('T')[0],
-      notes: notes || o.notes,
-    }))
+  const handleApprove = (orderId: string, notes: string, splits?: SplitApprovalEntry[]) => {
+    const today = new Date().toISOString().split('T')[0]
+    const order = orders.find(o => o.id === orderId)
+    if (!order) return
+
+    if (splits && splits.length > 1) {
+      // Multi-vendor split approval — mark parent, create children
+      updateOrder(orderId, {
+        costStatus: 'approved', isSplit: true,
+        approvedBy: 'Parthipan Kumar', approvedOn: today,
+        ...(notes ? { notes } : {}),
+      })
+      const children: CostingOrder[] = splits.map((s, i) => ({
+        id: `${orderId}-${String.fromCharCode(65 + i)}`,
+        styleCode: order.styleCode, styleName: order.styleName,
+        colour: order.colour, category: order.category,
+        vendor: s.vendorName, vendorLocation: s.vendorLocation, vendorId: s.vendorId,
+        orderQty: s.qty, targetPrice: order.targetPrice,
+        costStatus: 'approved' as CostStatus,
+        submittedCost: s.cost,
+        breakdown: s.breakdown,
+        notes: s.rfqNotes,
+        parentId: orderId, splitSeq: i + 1,
+        approvedBy: 'Parthipan Kumar', approvedOn: today,
+        buyingExpectedDate: order.buyingExpectedDate,
+        vendorTargetDate: order.vendorTargetDate,
+        season: order.season,
+      }))
+      addOrders(children)
+      toast(`Approved & split across ${splits.length} vendors ✓`)
+    } else {
+      updateOrder(orderId, {
+        costStatus: 'approved',
+        approvedBy: 'Parthipan Kumar', approvedOn: today,
+        ...(notes ? { notes } : {}),
+      })
+      toast('Costing approved ✓')
+    }
     setApprovalModal(null)
-    toast('Costing approved ✓')
   }
 
   const handleReject = (orderId: string, reason: string) => {
-    setOrders(prev => prev.map(o => o.id !== orderId ? o : {
-      ...o,
+    updateOrder(orderId, {
       costStatus: 'rejected',
       rejectedReason: reason,
       submittedCost: undefined,
       breakdown: undefined,
       submittedOn: undefined,
-    }))
+    })
     setApprovalModal(null)
     toast('Costing rejected — vendor notified')
   }
 
   const handleConfirmDate = (orderId: string, date: string) => {
-    setOrders(prev => prev.map(o => o.id !== orderId ? o : {
-      ...o,
-      confirmedInwardDate: date,
-      inwardDateConfirmed: true,
-    }))
+    updateOrder(orderId, { confirmedInwardDate: date, inwardDateConfirmed: true })
     setConfirmDateModal(null)
     toast('Inward date confirmed ✓')
   }
 
   const posFor = (orderId: string) => poRecords.filter(p => p.subOrderId === orderId)
+  const childrenOf = (parentId: string) => orders.filter(o => o.parentId === parentId)
 
   const handleSubmitCost = (orderId: string, cost: number, breakdown: NonNullable<CostingOrder['breakdown']>, notes: string, vendorId: string, confirmedDate?: string) => {
     const v = vendors.find(vv => vv.id === vendorId)
-    setOrders(prev => prev.map(o => o.id !== orderId ? o : {
-      ...o, submittedCost: cost, breakdown, notes,
+    const order = orders.find(o => o.id === orderId)
+    updateOrder(orderId, {
+      submittedCost: cost, breakdown, notes,
       costStatus: 'submitted', submittedOn: new Date().toISOString().split('T')[0],
-      // store vendor confirmed date if provided at quote stage
       ...(confirmedDate ? { confirmedInwardDate: confirmedDate, inwardDateConfirmed: true } : {}),
-      // if order had no vendor before, apply the selected vendor now
-      ...(o.vendorId === '' && v ? { vendor: v.name, vendorLocation: v.location ?? '', vendorId: v.id } : {}),
-    }))
+      ...(order?.vendorId === '' && v ? { vendor: v.name, vendorLocation: v.location ?? '', vendorId: v.id } : {}),
+    })
+    const matchingRFQ = rfqs.find(r => r.orderId === orderId && r.status !== 'cancelled')
+    if (matchingRFQ) updateRFQ(matchingRFQ.id, { status: 'responded', submittedCost: cost, breakdown, notes, responseDate: new Date().toISOString().split('T')[0] })
     toast('Quote submitted ✓')
   }
 
+  const handleConfirmSplit = (parentId: string, entries: LocalSplitEntry[]) => {
+    const parent = orders.find(o => o.id === parentId)
+    if (!parent) return
+    const oldChildIds = orders.filter(o => o.parentId === parentId).map(o => o.id)
+    if (oldChildIds.length > 0) removeOrders(oldChildIds)
+    const children: CostingOrder[] = entries.map((entry, i) => {
+      const v = vendors.find(vv => vv.id === entry.vendorId)
+      const seq = i + 1
+      const inheritCosting = seq === 1 && entry.vendorId === parent.vendorId && !!parent.submittedCost
+      return {
+        ...parent,
+        id:             `${parentId}-${seq}`,
+        parentId,
+        splitSeq:       seq,
+        isSplit:        false,
+        orderQty:       parseInt(entry.qty, 10) || 0,
+        vendorId:       entry.vendorId,
+        vendor:         v?.name ?? '',
+        vendorLocation: v?.location ?? '',
+        costStatus:     inheritCosting ? parent.costStatus : 'pending',
+        submittedCost:  inheritCosting ? parent.submittedCost : undefined,
+        breakdown:      inheritCosting ? parent.breakdown : undefined,
+        submittedOn:    inheritCosting ? parent.submittedOn : undefined,
+        approvedBy:     inheritCosting ? parent.approvedBy : undefined,
+        approvedOn:     inheritCosting ? parent.approvedOn : undefined,
+        notes:          inheritCosting ? parent.notes : undefined,
+        escalationReason: undefined,
+        rejectedReason:   undefined,
+        confirmedInwardDate: undefined,
+        inwardDateConfirmed: false,
+      }
+    })
+    addOrders(children)
+    updateOrder(parentId, { isSplit: true })
+    setSplitModal(null)
+    toast(`Order split into ${entries.length} — costing to be confirmed per vendor ✓`)
+  }
+
+  // For the table: only show root orders in the main list; children are rendered inline under their parent
+  const rootOrders = orders.filter(o => !o.parentId)
+
   const counts = {
-    'no-vendor': orders.filter(o => o.costStatus === 'no-vendor').length,
+    'no-vendor': rootOrders.filter(o => o.costStatus === 'no-vendor').length,
     pending:     orders.filter(o => o.costStatus === 'pending').length,
     submitted:   orders.filter(o => o.costStatus === 'submitted').length,
     approved:    orders.filter(o => o.costStatus === 'approved').length,
@@ -4181,11 +6297,87 @@ function CostingView() {
     escalated:   orders.filter(o => o.costStatus === 'escalated').length,
   }
 
-  const filtered = filterStatus === 'all' ? orders : orders.filter(o => o.costStatus === filterStatus)
+  // Filter applies to root orders; always show their children below
+  const filtered = filterStatus === 'all'
+    ? rootOrders
+    : rootOrders.filter(o => {
+        // Show the root if it matches, OR if any of its children match
+        if (o.costStatus === filterStatus) return true
+        return childrenOf(o.id).some(c => c.costStatus === filterStatus)
+      })
+
+  const splitOrder = splitModal ? orders.find(o => o.id === splitModal) : null
   const modalOrder = activeModal ? orders.find(o => o.id === activeModal) : null
 
   return (
     <div className="px-3 py-4 md:px-6 md:py-6">
+      {/* Sub-tab navigation */}
+      <div className="flex gap-1 mb-5 bg-slate-100 rounded-xl p-1 w-fit">
+        {([
+          { key: 'orders', label: 'Orders'          },
+          { key: 'rfq',    label: 'RFQ'             },
+          { key: 'po',     label: 'Purchase Orders' },
+          { key: 'bulk',   label: 'Bulk Update'     },
+        ] as const).map(({ key, label }) => (
+          <button key={key} onClick={() => setCostSubTab(key)}
+            className={cn(
+              'px-4 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              costSubTab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            )}>
+            {label}
+            {key === 'rfq' && rfqs.filter(r => r.status === 'overdue').length > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full">
+                {rfqs.filter(r => r.status === 'overdue').length}
+              </span>
+            )}
+            {key === 'po' && poRecords.filter(p => p.status === 'failed').length > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full">
+                {poRecords.filter(p => p.status === 'failed').length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {costSubTab === 'rfq' && (
+        <RFQSubTab
+          rfqs={rfqs}
+          orders={orders}
+          vendors={vendors}
+          onSendRFQ={(orderId) => setSendRFQModal(orderId ?? null)}
+          onViewResponse={(orderId) => setApprovalModal(orderId)}
+          onFollowUp={(rfqId) => { followUpRFQ(rfqId); toast('Follow-up sent ✓') }}
+          onCancel={(rfqId) => { cancelRFQ(rfqId); toast('RFQ cancelled') }}
+        />
+      )}
+
+      {costSubTab === 'po' && (
+        <POSubTab
+          poRecords={poRecords}
+          orders={orders}
+          onRaisePO={order => setPoModalOrder(order)}
+          onUpdatePO={(id, patch) => setPoRecords(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))}
+        />
+      )}
+
+      {costSubTab === 'bulk' && (
+        <BulkCostingTab
+          orders={orders}
+          vendors={vendors ?? []}
+          onUpdateOrder={(id, patch) => updateOrder(id, patch)}
+          onApprove={id => { handleApprove(id, ''); }}
+          onReject={(id, reason) => handleReject(id, reason)}
+          onOpenSplit={id => setSplitModal(id)}
+          onDeleteChild={(childId, parentId) => {
+            removeOrders([childId])
+            const remainingChildren = orders.filter(o => o.parentId === parentId && o.id !== childId)
+            if (remainingChildren.length === 0) updateOrder(parentId, { isSplit: false })
+            toast('Child order removed ✓')
+          }}
+        />
+      )}
+
+      {costSubTab === 'orders' && <>
       {/* Summary cards — horizontal scroll on mobile, 6-col grid on desktop */}
       <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1 mb-5 md:grid md:grid-cols-6 md:overflow-visible md:pb-0">
         {([
@@ -4247,8 +6439,15 @@ function CostingView() {
                       order.costStatus === 'no-vendor'  ? 'bg-orange-50/30 hover:bg-orange-50/50' : 'hover:bg-slate-50'
                     )}>
                       <td className="px-4 py-3">
-                        <p className="text-sm font-semibold text-slate-900 leading-tight">{order.styleCode}</p>
-                        <p className="text-xs text-slate-400 mt-0.5 max-w-36 truncate">{order.styleName}</p>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <p className="text-sm font-semibold text-slate-900 leading-tight">{order.styleCode}</p>
+                          {order.isSplit && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-200 flex-shrink-0">
+                              <GitBranch className="w-2.5 h-2.5" /> SPLIT
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 max-w-36 truncate">{order.styleName}</p>
                         <p className="text-xs text-slate-400 font-mono">{order.id}</p>
                       </td>
                       <td className="px-4 py-3"><span className="text-xs text-slate-600">{order.colour}</span></td>
@@ -4264,7 +6463,14 @@ function CostingView() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3"><span className="text-sm font-medium text-slate-700">{order.orderQty.toLocaleString()}</span></td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm font-medium text-slate-700">{order.orderQty.toLocaleString()}</span>
+                        {order.isSplit && (
+                          <p className="text-[10px] text-violet-600 mt-0.5 font-medium">
+                            {childrenOf(order.id).length} splits
+                          </p>
+                        )}
+                      </td>
                       <td className="px-4 py-3"><span className="text-sm font-semibold text-slate-700">₹{order.targetPrice}</span></td>
                       <td className="px-4 py-3">
                         {order.submittedCost
@@ -4382,17 +6588,28 @@ function CostingView() {
                               {order.costStatus === 'rejected' ? 'Resubmit' : 'Submit Quote'}
                             </button>
                           )}
-                          {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (
-                            <button onClick={() => setApprovalModal(order.id)}
-                              className={cn(
-                                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap',
-                                order.costStatus === 'escalated'
-                                  ? 'bg-amber-600 text-white hover:bg-amber-700'
-                                  : 'bg-green-600 text-white hover:bg-green-700'
-                              )}>
-                              <Check className="w-3 h-3" /> Review & Approve
-                            </button>
-                          )}
+                          {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (() => {
+                            const quoteCount = rfqs.filter(r => r.orderId === order.id && r.status === 'responded' && r.submittedCost != null).length
+                            return (
+                              <div className="flex flex-col items-start gap-1">
+                                {quoteCount > 1 && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-1.5 py-0.5">
+                                    <GitBranch className="w-2.5 h-2.5" /> {quoteCount} vendor quotes
+                                  </span>
+                                )}
+                                <button onClick={() => setApprovalModal(order.id)}
+                                  className={cn(
+                                    'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap',
+                                    order.costStatus === 'escalated'
+                                      ? 'bg-amber-600 text-white hover:bg-amber-700'
+                                      : 'bg-green-600 text-white hover:bg-green-700'
+                                  )}>
+                                  <Check className="w-3 h-3" />
+                                  {quoteCount > 1 ? 'Compare & Approve' : 'Review & Approve'}
+                                </button>
+                              </div>
+                            )
+                          })()}
                           {order.costStatus === 'approved' && !order.inwardDateConfirmed && (
                             <button onClick={() => setConfirmDateModal(order.id)}
                               className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors whitespace-nowrap">
@@ -4403,6 +6620,20 @@ function CostingView() {
                             <button onClick={() => setConfirmDateModal(order.id)}
                               className="flex items-center gap-1.5 px-2 py-1 text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors whitespace-nowrap">
                               <Check className="w-3 h-3" /> Date Confirmed
+                            </button>
+                          )}
+                          {/* Split button — only for root (non-child) orders that have a vendor */}
+                          {!order.parentId && order.costStatus !== 'no-vendor' && (
+                            <button
+                              onClick={() => setSplitModal(order.id)}
+                              title={order.isSplit ? 'Edit split' : 'Split order between vendors'}
+                              className={cn(
+                                'p-1.5 rounded-lg transition-colors',
+                                order.isSplit
+                                  ? 'bg-violet-100 text-violet-600 hover:bg-violet-200'
+                                  : 'hover:bg-slate-100 text-slate-300 hover:text-violet-600'
+                              )}>
+                              <Scissors className="w-3.5 h-3.5" />
                             </button>
                           )}
                           {(order.notes || order.escalationReason || order.rejectedReason) && (
@@ -4432,6 +6663,171 @@ function CostingView() {
                         </td>
                       </tr>
                     )}
+
+                    {/* ── Child split rows — rendered inline after parent ── */}
+                    {childrenOf(order.id).map(child => (
+                      <Fragment key={child.id}>
+                        <tr className={cn(
+                          'border-b border-slate-100 transition-colors',
+                          child.costStatus === 'escalated'  ? 'bg-red-50/30' :
+                          child.costStatus === 'approved'   ? 'bg-green-50/20' :
+                          child.costStatus === 'submitted'  ? 'bg-violet-50/15' :
+                          'bg-slate-50/50 hover:bg-slate-100/50'
+                        )}>
+                          {/* Style — indented */}
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2 pl-2">
+                              <span className="text-slate-300 text-base leading-none select-none">└</span>
+                              <div>
+                                <p className="text-xs font-semibold text-slate-700 leading-tight">{order.styleCode}</p>
+                                <p className="text-[10px] text-slate-400 font-mono mt-0.5">{child.id}</p>
+                              </div>
+                            </div>
+                          </td>
+                          {/* Colour */}
+                          <td className="px-4 py-2.5"><span className="text-xs text-slate-500">{order.colour}</span></td>
+                          {/* Vendor */}
+                          <td className="px-4 py-2.5">
+                            {child.vendorId ? (
+                              <>
+                                <p className="text-xs font-medium text-slate-700 leading-tight">{child.vendor}</p>
+                                <p className="text-xs text-slate-400">{child.vendorLocation}</p>
+                              </>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs text-orange-600 font-medium">
+                                <AlertCircle className="w-3 h-3" /> Not assigned
+                              </span>
+                            )}
+                          </td>
+                          {/* Qty */}
+                          <td className="px-4 py-2.5">
+                            <span className="text-sm font-medium text-slate-700">{child.orderQty.toLocaleString()}</span>
+                            <p className="text-[10px] text-slate-400">
+                              {Math.round((child.orderQty / order.orderQty) * 100)}% of {order.orderQty.toLocaleString()}
+                            </p>
+                          </td>
+                          {/* Target */}
+                          <td className="px-4 py-2.5"><span className="text-sm font-semibold text-slate-700">₹{order.targetPrice}</span></td>
+                          {/* Quoted */}
+                          <td className="px-4 py-2.5">
+                            {child.submittedCost
+                              ? <span className="text-sm font-bold text-slate-900">₹{child.submittedCost}</span>
+                              : <span className="text-xs text-slate-400">—</span>}
+                          </td>
+                          {/* Variance */}
+                          <td className="px-4 py-2.5">
+                            {child.submittedCost
+                              ? <VarianceChip target={order.targetPrice} quoted={child.submittedCost} />
+                              : <span className="text-xs text-slate-400">—</span>}
+                          </td>
+                          {/* Breakdown */}
+                          <td className="px-4 py-2.5">
+                            {child.breakdown
+                              ? <BreakdownBar breakdown={child.breakdown} />
+                              : <span className="text-xs text-slate-400">—</span>}
+                          </td>
+                          {/* Inward Date */}
+                          <td className="px-4 py-2.5 min-w-[130px]">
+                            <p className="text-xs font-medium text-slate-700">
+                              {new Date(child.vendorTargetDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            </p>
+                            {child.inwardDateConfirmed && child.confirmedInwardDate ? (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <Check className="w-2.5 h-2.5 text-teal-600 flex-shrink-0" />
+                                <span className={cn('text-[10px] font-semibold',
+                                  child.confirmedInwardDate > child.buyingExpectedDate ? 'text-red-600' : 'text-teal-700'
+                                )}>
+                                  {new Date(child.confirmedInwardDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} confirmed
+                                </span>
+                              </div>
+                            ) : null}
+                          </td>
+                          {/* Status */}
+                          <td className="px-4 py-2.5">
+                            <div className="space-y-1">
+                              <CostStatusBadge status={child.costStatus} />
+                              {child.submittedOn && (
+                                <p className="text-xs text-slate-400">
+                                  {child.costStatus === 'approved' ? 'Approved' : 'Submitted'}{' '}
+                                  {new Date(child.submittedOn).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                </p>
+                              )}
+                              {child.approvedBy && <p className="text-xs text-slate-400">by {child.approvedBy}</p>}
+                            </div>
+                          </td>
+                          {/* PO */}
+                          <td className="px-4 py-2.5">
+                            {child.costStatus === 'approved' && posFor(child.id).length === 0 ? (
+                              <button onClick={() => setPoModalOrder(child)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white text-xs font-semibold rounded-lg hover:bg-violet-700 transition-colors whitespace-nowrap shadow-sm">
+                                <Package className="w-3 h-3" /> Raise PO
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-300">—</span>
+                            )}
+                          </td>
+                          {/* Actions — no split button for children */}
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-1.5">
+                              {(child.costStatus === 'pending' || child.costStatus === 'rejected') && (
+                                <button onClick={() => setActiveModal(child.id)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white text-xs font-medium rounded-lg hover:bg-violet-700 transition-colors whitespace-nowrap">
+                                  <IndianRupee className="w-3 h-3" />
+                                  {child.costStatus === 'rejected' ? 'Resubmit' : 'Submit Quote'}
+                                </button>
+                              )}
+                              {(child.costStatus === 'submitted' || child.costStatus === 'escalated') && (
+                                <button onClick={() => setApprovalModal(child.id)}
+                                  className={cn(
+                                    'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap',
+                                    child.costStatus === 'escalated'
+                                      ? 'bg-amber-600 text-white hover:bg-amber-700'
+                                      : 'bg-green-600 text-white hover:bg-green-700'
+                                  )}>
+                                  <Check className="w-3 h-3" /> Review & Approve
+                                </button>
+                              )}
+                              {child.costStatus === 'approved' && !child.inwardDateConfirmed && (
+                                <button onClick={() => setConfirmDateModal(child.id)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors whitespace-nowrap">
+                                  <CalendarCheck className="w-3 h-3" /> Confirm Date
+                                </button>
+                              )}
+                              {child.costStatus === 'approved' && child.inwardDateConfirmed && (
+                                <button onClick={() => setConfirmDateModal(child.id)}
+                                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors whitespace-nowrap">
+                                  <Check className="w-3 h-3" /> Date Confirmed
+                                </button>
+                              )}
+                              {(child.notes || child.escalationReason || child.rejectedReason) && (
+                                <button onClick={() => setExpandedRow(expandedRow === child.id ? null : child.id)}
+                                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
+                                  <FileText className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {expandedRow === child.id && (
+                          <tr key={`${child.id}-notes`} className="bg-violet-50/20 border-b border-slate-100">
+                            <td colSpan={12} className="pl-14 pr-6 py-3">
+                              {child.escalationReason && (
+                                <div className="flex gap-2 mb-2">
+                                  <AlertCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0 mt-0.5" />
+                                  <p className="text-xs text-red-700 font-medium">{child.escalationReason}</p>
+                                </div>
+                              )}
+                              {child.notes && (
+                                <div className="flex gap-2">
+                                  <Info className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+                                  <p className="text-xs text-slate-600 italic">{child.notes}</p>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
                   </>
                 ))}
             </tbody>
@@ -4555,16 +6951,20 @@ function CostingView() {
                       {order.costStatus === 'rejected' ? 'Resubmit Quote' : 'Submit Quote'}
                     </button>
                   )}
-                  {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (
-                    <button onClick={() => setApprovalModal(order.id)}
-                      className={cn('flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex-1 justify-center',
-                        order.costStatus === 'escalated'
-                          ? 'bg-amber-600 text-white hover:bg-amber-700'
-                          : 'bg-green-600 text-white hover:bg-green-700'
-                      )}>
-                      <Check className="w-3 h-3" /> Review & Approve
-                    </button>
-                  )}
+                  {(order.costStatus === 'submitted' || order.costStatus === 'escalated') && (() => {
+                    const qCount = rfqs.filter(r => r.orderId === order.id && r.status === 'responded' && r.submittedCost != null).length
+                    return (
+                      <button onClick={() => setApprovalModal(order.id)}
+                        className={cn('flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex-1 justify-center',
+                          order.costStatus === 'escalated'
+                            ? 'bg-amber-600 text-white hover:bg-amber-700'
+                            : 'bg-green-600 text-white hover:bg-green-700'
+                        )}>
+                        <Check className="w-3 h-3" />
+                        {qCount > 1 ? 'Compare & Approve' : 'Review & Approve'}
+                      </button>
+                    )
+                  })()}
                   {order.costStatus === 'approved' && !order.inwardDateConfirmed && (
                     <button onClick={() => setConfirmDateModal(order.id)}
                       className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors flex-1 justify-center">
@@ -4607,6 +7007,31 @@ function CostingView() {
         <span>·</span>
         <span>All costs submitted by POC are logged on behalf of the vendor</span>
       </div>
+      </>}
+
+      {sendRFQModal !== undefined && (
+        <SendRFQModal
+          orders={orders.filter(o => !o.parentId && (o.costStatus === 'no-vendor' || o.costStatus === 'pending'))}
+          vendors={vendors}
+          preOrderId={sendRFQModal ?? undefined}
+          onClose={() => setSendRFQModal(undefined)}
+          onConfirm={(orderId, vendorId, vendorName, vendorLocation, qty, dueDate, notes) => {
+            storeSendRFQ(orderId, vendorId, vendorName, vendorLocation, qty, dueDate, notes)
+            setSendRFQModal(undefined)
+            toast('RFQ sent ✓')
+          }}
+        />
+      )}
+
+      {splitOrder && (
+        <SplitOrderModal
+          order={splitOrder}
+          vendors={vendors}
+          existingChildren={childrenOf(splitOrder.id)}
+          onClose={() => setSplitModal(null)}
+          onConfirm={handleConfirmSplit}
+        />
+      )}
 
       {modalOrder && (
         <CostSubmitModal order={modalOrder} vendors={vendors} onClose={() => setActiveModal(null)} onSubmit={handleSubmitCost} />
@@ -4615,6 +7040,7 @@ function CostingView() {
       {approvalModal && orders.find(o => o.id === approvalModal) && (
         <CostApprovalModal
           order={orders.find(o => o.id === approvalModal)!}
+          rfqRecords={rfqs}
           onClose={() => setApprovalModal(null)}
           onApprove={handleApprove}
           onReject={handleReject}

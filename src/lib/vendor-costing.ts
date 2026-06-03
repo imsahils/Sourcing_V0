@@ -3,6 +3,41 @@
 
 export type CostStatus = 'pending' | 'submitted' | 'approved' | 'escalated'
 
+// Open costing breakdown — matches the sourcing cost sheet columns DN–EC
+export type OpenCostingBreakdown = {
+  mainFabricPrice: number        // DN  ₹/metre
+  mainFabricConsumption: number  // DO  metres
+  trimFabricPrice: number        // DQ  ₹/metre
+  trimFabricConsumption: number  // DR  metres
+  trimCostThread: number         // DU  trims + thread ₹
+  cmp: number                    // DV  cut, make, pack ₹
+  valueAddition: number          // DW  embroidery, print, etc. ₹
+  testing: number                // DY  lab testing ₹
+  logistic: number               // DZ  freight ₹
+  rejectionPct: number           // EA  % applied on TTL product cost
+  marginPct: number              // EB  % applied on TTL product cost
+}
+
+// Compute all intermediate totals from stored breakdown (mirrors the spreadsheet columns DP–EC)
+export function deriveOpenCostingTotals(b: OpenCostingBreakdown) {
+  const mainFabricCost   = b.mainFabricPrice * b.mainFabricConsumption
+  const trimFabricCost   = b.trimFabricPrice * b.trimFabricConsumption
+  const ttlFabricCost    = mainFabricCost + trimFabricCost
+  const ttlProductCost   = ttlFabricCost + b.trimCostThread + b.cmp + b.valueAddition
+  const rejectionAmt     = ttlProductCost * (b.rejectionPct / 100)
+  const marginAmt        = ttlProductCost * (b.marginPct / 100)
+  const openCostingTotal = ttlProductCost + b.testing + b.logistic + rejectionAmt + marginAmt
+  return {
+    mainFabricCost:   Math.round(mainFabricCost * 100) / 100,
+    trimFabricCost:   Math.round(trimFabricCost * 100) / 100,
+    ttlFabricCost:    Math.round(ttlFabricCost * 100) / 100,
+    ttlProductCost:   Math.round(ttlProductCost * 100) / 100,
+    rejectionAmt:     Math.round(rejectionAmt * 100) / 100,
+    marginAmt:        Math.round(marginAmt * 100) / 100,
+    openCostingTotal: Math.round(openCostingTotal * 100) / 100,
+  }
+}
+
 export type VendorCostOrder = {
   id: string
   styleCode: string
@@ -15,10 +50,7 @@ export type VendorCostOrder = {
   inwardDate: string
   costingDueDate: string
   submittedCost?: number
-  breakdown?: {
-    fabric: number; cmt: number; trims: number
-    print: number; packaging: number; other: number
-  }
+  breakdown?: OpenCostingBreakdown
   notes?: string
   pocName: string
   escalationNote?: string        // set when costStatus === 'escalated'
@@ -59,7 +91,12 @@ export const VENDOR_COSTING_ORDERS: Record<string, VendorCostOrder[]> = {
       colour: 'LAVENDER', category: 'Wovens', orderQty: 350, targetPrice: 420,
       costStatus: 'submitted', inwardDate: '2026-06-28', costingDueDate: '2026-04-15',
       submittedCost: 398,
-      breakdown: { fabric: 178, cmt: 96, trims: 52, print: 38, packaging: 18, other: 16 },
+      breakdown: {
+        mainFabricPrice: 115, mainFabricConsumption: 1.5,   // 172.5
+        trimFabricPrice: 22,  trimFabricConsumption: 0.4,   //   8.8
+        trimCostThread: 52, cmp: 96, valueAddition: 38,     // ttlProduct ≈ 367
+        testing: 12, logistic: 8, rejectionPct: 2, marginPct: 2.5,
+      },
       notes: 'Fabric cost elevated due to yarn dyed woven; CMT competitive.',
       pocName: 'Parthipan Kumar',
     },
@@ -68,7 +105,12 @@ export const VENDOR_COSTING_ORDERS: Record<string, VendorCostOrder[]> = {
       colour: 'PEACH', category: 'Wovens', orderQty: 480, targetPrice: 295,
       costStatus: 'escalated', inwardDate: '2026-07-05', costingDueDate: '2026-04-25',
       submittedCost: 342,
-      breakdown: { fabric: 155, cmt: 88, trims: 42, print: 20, packaging: 22, other: 15 },
+      breakdown: {
+        mainFabricPrice: 98,  mainFabricConsumption: 1.4,   // 137.2
+        trimFabricPrice: 18,  trimFabricConsumption: 0.5,   //   9.0
+        trimCostThread: 42, cmp: 88, valueAddition: 20,     // ttlProduct ≈ 296
+        testing: 12, logistic: 14, rejectionPct: 3, marginPct: 5,
+      },
       notes: 'Fabric sourced from premium mill.',
       pocName: 'Parthipan Kumar',
       escalationNote: 'Quote is significantly above acceptable range. Please review fabric and CMT components and resubmit.',
@@ -78,7 +120,12 @@ export const VENDOR_COSTING_ORDERS: Record<string, VendorCostOrder[]> = {
       colour: 'WHITE', category: 'Wovens', orderQty: 720, targetPrice: 260,
       costStatus: 'approved', inwardDate: '2026-05-30', costingDueDate: '2026-04-05',
       submittedCost: 248,
-      breakdown: { fabric: 108, cmt: 72, trims: 34, print: 0, packaging: 18, other: 16 },
+      breakdown: {
+        mainFabricPrice: 88,  mainFabricConsumption: 1.3,   // 114.4
+        trimFabricPrice: 14,  trimFabricConsumption: 0.35,  //   4.9
+        trimCostThread: 34, cmp: 72, valueAddition: 0,      // ttlProduct ≈ 225
+        testing: 8, logistic: 6, rejectionPct: 2, marginPct: 2,
+      },
       pocName: 'Parthipan Kumar',
     },
   ],
@@ -94,7 +141,12 @@ export const VENDOR_COSTING_ORDERS: Record<string, VendorCostOrder[]> = {
       colour: 'BEIGE', category: 'Wovens', orderQty: 380, targetPrice: 290,
       costStatus: 'approved', inwardDate: '2026-06-10', costingDueDate: '2026-04-10',
       submittedCost: 275,
-      breakdown: { fabric: 118, cmt: 74, trims: 36, print: 0, packaging: 14, other: 33 },
+      breakdown: {
+        mainFabricPrice: 92,  mainFabricConsumption: 1.25,  // 115
+        trimFabricPrice: 18,  trimFabricConsumption: 0.3,   //   5.4
+        trimCostThread: 36, cmp: 74, valueAddition: 0,      // ttlProduct ≈ 230
+        testing: 10, logistic: 8, rejectionPct: 2, marginPct: 8,
+      },
       pocName: 'Parthipan Kumar',
     },
   ],

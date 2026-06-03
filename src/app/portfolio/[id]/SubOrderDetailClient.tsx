@@ -1296,14 +1296,19 @@ function InspectionTab({ order, onRequestFI }: { order: SubOrder; onRequestFI: (
 
 // ─── Costing types ────────────────────────────────────────────────────────────
 
-type CostBreakdown = {
-  fabric: string       // ₹/m
-  fabricConsumption: string // metres
-  cmt: string          // cut + make + trim
-  trims: string        // buttons, zippers, labels
-  washing: string      // washing / dyeing / processing
-  packing: string      // poly bags, hangers, tags
-  other: string
+// Open costing — matches the exact columns from the sourcing cost sheet
+type OpenCosting = {
+  mainFabricPrice: string        // DN — ₹/metre
+  mainFabricConsumption: string  // DO — metres
+  trimFabricPrice: string        // DQ — ₹/metre
+  trimFabricConsumption: string  // DR — metres
+  trimCostThread: string         // DU — trims + thread (₹)
+  cmp: string                    // DV — cut, make, pack (₹)
+  valueAddition: string          // DW — embroidery, print, etc. (₹)
+  testing: string                // DY — lab testing (₹)
+  logistic: string               // DZ — freight / logistics (₹)
+  rejectionPct: string           // EA — % applied on TTL product cost
+  marginPct: string              // EB — % applied on TTL product cost
 }
 
 type NegotiationRound = {
@@ -1316,14 +1321,42 @@ type NegotiationRound = {
   status: 'pending' | 'countered' | 'approved' | 'escalated'
 }
 
-function calcTotal(b: CostBreakdown): number {
-  const fabric  = (parseFloat(b.fabric) || 0) * (parseFloat(b.fabricConsumption) || 0)
-  const rest    = [b.cmt, b.trims, b.washing, b.packing, b.other].reduce((s, v) => s + (parseFloat(v) || 0), 0)
-  return Math.round((fabric + rest) * 100) / 100
+// Intermediate open costing calculation — mirrors the spreadsheet columns
+function deriveOpenCosting(b: OpenCosting) {
+  const mainFabricCost  = (parseFloat(b.mainFabricPrice) || 0) * (parseFloat(b.mainFabricConsumption) || 0)
+  const trimFabricCost  = (parseFloat(b.trimFabricPrice) || 0) * (parseFloat(b.trimFabricConsumption) || 0)
+  const ttlFabricCost   = mainFabricCost + trimFabricCost
+  const ttlProductCost  = ttlFabricCost
+                        + (parseFloat(b.trimCostThread) || 0)
+                        + (parseFloat(b.cmp) || 0)
+                        + (parseFloat(b.valueAddition) || 0)
+  const rejectionAmt    = ttlProductCost * ((parseFloat(b.rejectionPct) || 0) / 100)
+  const marginAmt       = ttlProductCost * ((parseFloat(b.marginPct) || 0) / 100)
+  const openCostingTotal = ttlProductCost
+                         + (parseFloat(b.testing) || 0)
+                         + (parseFloat(b.logistic) || 0)
+                         + rejectionAmt
+                         + marginAmt
+  return {
+    mainFabricCost:   Math.round(mainFabricCost * 100) / 100,
+    trimFabricCost:   Math.round(trimFabricCost * 100) / 100,
+    ttlFabricCost:    Math.round(ttlFabricCost * 100) / 100,
+    ttlProductCost:   Math.round(ttlProductCost * 100) / 100,
+    rejectionAmt:     Math.round(rejectionAmt * 100) / 100,
+    marginAmt:        Math.round(marginAmt * 100) / 100,
+    openCostingTotal: Math.round(openCostingTotal * 100) / 100,
+  }
 }
 
 function variancePct(cost: number, target: number) {
   return Math.round(((cost - target) / target) * 100)
+}
+
+// Returns the label for who needs to approve based on variance %
+function approvalRouting(variance: number): { role: string; colour: 'green' | 'amber' | 'red' } {
+  if (variance <= 0)  return { role: 'Sourcing POC',       colour: 'green' }
+  if (variance <= 5)  return { role: 'Sourcing Manager',   colour: 'amber' }
+  return               { role: 'Category Head',            colour: 'red'   }
 }
 
 function CostingTab({ order }: { order: SubOrder }) {
@@ -1332,12 +1365,15 @@ function CostingTab({ order }: { order: SubOrder }) {
   const isSubmitted = order.costStatus === 'submitted'
   const isEscalated = order.costStatus === 'escalated'
 
-  // ── Breakdown state ──────────────────────────────────────────────────────────
-  const [breakdown, setBreakdown] = useState<CostBreakdown>({
-    fabric: '', fabricConsumption: '', cmt: '', trims: '', washing: '', packing: '', other: '',
+  // ── Open costing state ───────────────────────────────────────────────────────
+  const [breakdown, setBreakdown] = useState<OpenCosting>({
+    mainFabricPrice: '', mainFabricConsumption: '',
+    trimFabricPrice: '', trimFabricConsumption: '',
+    trimCostThread: '', cmp: '', valueAddition: '',
+    testing: '', logistic: '', rejectionPct: '', marginPct: '',
   })
   const [showBreakdown, setShowBreakdown] = useState(false)
-  const bField = (k: keyof CostBreakdown) => (v: string) => setBreakdown(p => ({ ...p, [k]: v }))
+  const bField = (k: keyof OpenCosting) => (v: string) => setBreakdown(p => ({ ...p, [k]: v }))
 
   // ── Negotiation / submission state ───────────────────────────────────────────
   const [rounds, setRounds] = useState<NegotiationRound[]>([])
@@ -1349,11 +1385,13 @@ function CostingTab({ order }: { order: SubOrder }) {
   const [action, setAction]             = useState<'idle'|'counter'|'escalate'|'done'>('idle')
   const [mode, setMode]                 = useState<'vendor'|'poc'>('poc')
 
-  const totalFromBreakdown = calcTotal(breakdown)
+  const derived            = deriveOpenCosting(breakdown)
+  const totalFromBreakdown = derived.openCostingTotal
   const effectiveQuote     = parseFloat(quoteInput) || 0
   const variance           = effectiveQuote > 0 ? variancePct(effectiveQuote, order.targetPrice) : null
   const withinTarget        = order.closedCost !== undefined && order.closedCost <= order.targetPrice
   const savings             = order.closedCost !== undefined ? order.targetPrice - order.closedCost : 0
+  const routing            = variance !== null ? approvalRouting(variance) : null
 
   function submitRound() {
     if (!quoteInput) return
@@ -1452,9 +1490,9 @@ function CostingTab({ order }: { order: SubOrder }) {
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">Approved Cost Summary</h3>
-            {withinTarget && (
-              <span className="text-xs bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium">Auto-approved</span>
-            )}
+            <span className="text-xs bg-green-100 text-green-700 px-2.5 py-1 rounded-full font-medium flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> Approved
+            </span>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-green-50 border border-green-100 rounded-lg px-4 py-3">
@@ -1473,7 +1511,7 @@ function CostingTab({ order }: { order: SubOrder }) {
         </div>
       )}
 
-      {/* ── Cost Breakdown Builder ─────────────────────────────────────────── */}
+      {/* ── Open Costing Form ─────────────────────────────────────────────── */}
       {!isApproved && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <button
@@ -1482,71 +1520,155 @@ function CostingTab({ order }: { order: SubOrder }) {
           >
             <div className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-violet-600" />
-              <span className="text-sm font-semibold text-slate-800">Cost Breakdown Builder</span>
-              <span className="text-xs text-slate-400">(optional — helps validate the quote)</span>
+              <span className="text-sm font-semibold text-slate-800">Open Costing Breakdown</span>
+              <span className="text-xs text-slate-400">(optional — auto-calculates the final quote)</span>
             </div>
             <div className="flex items-center gap-3">
               {totalFromBreakdown > 0 && (
-                <span className="text-sm font-bold text-violet-700">₹{totalFromBreakdown} total</span>
+                <span className="text-sm font-bold text-violet-700">₹{totalFromBreakdown} / pc</span>
               )}
               <ChevronDown className={cn('w-4 h-4 text-slate-400 transition-transform', showBreakdown && 'rotate-180')} />
             </div>
           </button>
 
           {showBreakdown && (
-            <div className="border-t border-slate-100 px-5 py-4 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                {/* Fabric — special: rate × consumption */}
-                <div className="col-span-2 bg-violet-50 border border-violet-100 rounded-xl p-3">
-                  <p className="text-xs font-semibold text-violet-700 mb-2">Fabric Cost</p>
-                  <div className="grid grid-cols-3 gap-2 items-end">
+            <div className="border-t border-slate-100 px-5 py-4 space-y-4">
+
+              {/* ── Fabric Section ── */}
+              <div>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Fabric</p>
+                <div className="space-y-2">
+                  {/* Main Fabric */}
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
                     <div>
-                      <label className="text-[10px] text-slate-500 block mb-1">Rate (₹/metre)</label>
-                      <input type="number" value={breakdown.fabric} onChange={e => bField('fabric')(e.target.value)}
-                        placeholder="e.g. 120" className="w-full text-xs border border-violet-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400" />
+                      <label className="text-[10px] text-slate-400 block mb-1">Main Fabric Price (₹/m)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                        <input type="number" value={breakdown.mainFabricPrice} onChange={e => bField('mainFabricPrice')(e.target.value)}
+                          placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                      </div>
                     </div>
                     <div>
-                      <label className="text-[10px] text-slate-500 block mb-1">Consumption (metres)</label>
-                      <input type="number" value={breakdown.fabricConsumption} onChange={e => bField('fabricConsumption')(e.target.value)}
-                        placeholder="e.g. 1.4" className="w-full text-xs border border-violet-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400" />
+                      <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+                      <input type="number" value={breakdown.mainFabricConsumption} onChange={e => bField('mainFabricConsumption')(e.target.value)}
+                        placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
                     </div>
-                    <div className="bg-white border border-violet-200 rounded-lg px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400">= Fabric/pc</p>
-                      <p className="text-sm font-bold text-violet-700">
-                        ₹{((parseFloat(breakdown.fabric)||0)*(parseFloat(breakdown.fabricConsumption)||0)).toFixed(2)}
-                      </p>
+                    <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[80px]">
+                      <p className="text-[9px] text-slate-400">Main Fabric Cost</p>
+                      <p className="text-sm font-bold text-violet-700">₹{derived.mainFabricCost.toFixed(2)}</p>
+                    </div>
+                  </div>
+                  {/* Trim Fabric */}
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Trim Fabric Price (₹/m)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                        <input type="number" value={breakdown.trimFabricPrice} onChange={e => bField('trimFabricPrice')(e.target.value)}
+                          placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+                      <input type="number" value={breakdown.trimFabricConsumption} onChange={e => bField('trimFabricConsumption')(e.target.value)}
+                        placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                    </div>
+                    <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[80px]">
+                      <p className="text-[9px] text-slate-400">Trim Fabric Cost</p>
+                      <p className="text-sm font-bold text-violet-700">₹{derived.trimFabricCost.toFixed(2)}</p>
                     </div>
                   </div>
                 </div>
-
-                {([
-                  { key: 'cmt',     label: 'CMT',               hint: 'Cutting, making, finishing' },
-                  { key: 'trims',   label: 'Trims & Accessories', hint: 'Buttons, zippers, labels, threads' },
-                  { key: 'washing', label: 'Washing / Processing', hint: 'Dyeing, washing, stone wash, etc.' },
-                  { key: 'packing', label: 'Packing',            hint: 'Poly bags, hangers, price tags' },
-                  { key: 'other',   label: 'Other / Overhead',   hint: 'Transport, admin, contingency' },
-                ] as { key: keyof CostBreakdown; label: string; hint: string }[]).map(({ key, label, hint }) => (
-                  <div key={key}>
-                    <label className="text-[10px] text-slate-500 block mb-1">{label} <span className="text-slate-400">({hint})</span></label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">₹</span>
-                      <input type="number" value={breakdown[key]} onChange={e => bField(key)(e.target.value)}
-                        placeholder="0"
-                        className="w-full text-xs border border-slate-200 rounded-lg pl-7 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                    </div>
+                {/* TTL Fabric subtotal */}
+                <div className="mt-2 flex justify-end">
+                  <div className="bg-slate-800 text-white rounded-lg px-4 py-1.5 flex items-center gap-3">
+                    <span className="text-[10px] font-medium">TTL Fabric Cost</span>
+                    <span className="text-sm font-bold">₹{derived.ttlFabricCost.toFixed(2)}</span>
                   </div>
-                ))}
+                </div>
               </div>
 
-              {/* Totals bar */}
-              <div className="bg-slate-900 text-white rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-2">
-                <span className="text-xs font-medium">Calculated Total Cost / Piece</span>
+              {/* ── Processing Section ── */}
+              <div>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Processing</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { key: 'trimCostThread' as const, label: 'Trim Cost + Thread', hint: 'buttons, zippers, labels, thread' },
+                    { key: 'cmp'            as const, label: 'CMP',                hint: 'cut, make, pack' },
+                    { key: 'valueAddition'  as const, label: 'Value Addition',     hint: 'embroidery, print, etc.' },
+                  ]).map(({ key, label, hint }) => (
+                    <div key={key}>
+                      <label className="text-[10px] text-slate-400 block mb-1">{label} <span className="text-slate-300">({hint})</span></label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                        <input type="number" value={breakdown[key]} onChange={e => bField(key)(e.target.value)}
+                          placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* TTL Product Cost subtotal */}
+                <div className="mt-2 flex justify-end">
+                  <div className="bg-slate-800 text-white rounded-lg px-4 py-1.5 flex items-center gap-3">
+                    <span className="text-[10px] font-medium">TTL Product Cost</span>
+                    <span className="text-sm font-bold">₹{derived.ttlProductCost.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Overheads Section ── */}
+              <div>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Overheads & Margins</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Testing (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                      <input type="number" value={breakdown.testing} onChange={e => bField('testing')(e.target.value)}
+                        placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Logistic (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                      <input type="number" value={breakdown.logistic} onChange={e => bField('logistic')(e.target.value)}
+                        placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Rejection %</label>
+                    <div className="relative">
+                      <input type="number" value={breakdown.rejectionPct} onChange={e => bField('rejectionPct')(e.target.value)}
+                        placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg px-3 pr-7 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">%</span>
+                    </div>
+                    {breakdown.rejectionPct && <p className="text-[10px] text-slate-400 mt-0.5">= ₹{derived.rejectionAmt.toFixed(2)}/pc</p>}
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Margin %</label>
+                    <div className="relative">
+                      <input type="number" value={breakdown.marginPct} onChange={e => bField('marginPct')(e.target.value)}
+                        placeholder="0" className="w-full text-xs border border-slate-200 rounded-lg px-3 pr-7 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">%</span>
+                    </div>
+                    {breakdown.marginPct && <p className="text-[10px] text-slate-400 mt-0.5">= ₹{derived.marginAmt.toFixed(2)}/pc</p>}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Final total bar ── */}
+              <div className={cn('rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2',
+                totalFromBreakdown === 0 ? 'bg-slate-900' :
+                totalFromBreakdown <= order.targetPrice ? 'bg-green-700' : 'bg-red-700'
+              )}>
+                <div className="text-white">
+                  <p className="text-[10px] font-medium opacity-70">Cost (Open Costing) / piece</p>
+                  <p className="text-xl font-bold">₹{totalFromBreakdown > 0 ? totalFromBreakdown : '—'}</p>
+                </div>
                 <div className="flex items-center flex-wrap gap-3">
-                  <span className="text-lg font-bold">₹{totalFromBreakdown}</span>
                   {totalFromBreakdown > 0 && (
-                    <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium',
-                      totalFromBreakdown <= order.targetPrice ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-                    )}>
+                    <span className="text-xs text-white/80 font-medium">
                       {totalFromBreakdown <= order.targetPrice
                         ? `₹${(order.targetPrice - totalFromBreakdown).toFixed(0)} under target`
                         : `₹${(totalFromBreakdown - order.targetPrice).toFixed(0)} over target`}
@@ -1555,13 +1677,14 @@ function CostingTab({ order }: { order: SubOrder }) {
                   {totalFromBreakdown > 0 && (
                     <button
                       onClick={() => setQuoteInput(String(totalFromBreakdown))}
-                      className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded-lg transition-colors font-medium"
+                      className="text-xs bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors font-medium"
                     >
                       Use as Quote →
                     </button>
                   )}
                 </div>
               </div>
+
             </div>
           )}
         </div>
@@ -1627,21 +1750,19 @@ function CostingTab({ order }: { order: SubOrder }) {
                     placeholder={String(order.targetPrice)}
                     className="w-full border border-slate-200 rounded-xl pl-9 pr-4 py-3 text-xl font-bold focus:outline-none focus:ring-2 focus:ring-violet-500" />
                 </div>
-                {quoteInput && variance !== null && (
+                {quoteInput && variance !== null && routing && (
                   <div className={cn('mt-2 px-4 py-2.5 rounded-xl text-xs font-medium flex items-center gap-2',
-                    variance <= 0 ? 'bg-green-50 border border-green-200 text-green-700' :
-                    variance <= 5 ? 'bg-amber-50 border border-amber-200 text-amber-700' :
+                    routing.colour === 'green' ? 'bg-green-50 border border-green-200 text-green-700' :
+                    routing.colour === 'amber' ? 'bg-amber-50 border border-amber-200 text-amber-700' :
                     'bg-red-50 border border-red-200 text-red-700'
                   )}>
-                    {variance <= 0 && <CheckCircle2 className="w-3.5 h-3.5" />}
-                    {variance > 0 && variance <= 5 && <AlertCircle className="w-3.5 h-3.5" />}
-                    {variance > 5 && <AlertTriangle className="w-3.5 h-3.5" />}
+                    {routing.colour === 'green' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                    {routing.colour === 'amber' && <AlertCircle className="w-3.5 h-3.5" />}
+                    {routing.colour === 'red'   && <AlertTriangle className="w-3.5 h-3.5" />}
                     <span>
                       {variance <= 0
-                        ? `Within target · ₹${Math.abs(variance * order.targetPrice / 100).toFixed(0)} headroom · will auto-approve`
-                        : variance <= 5
-                        ? `${variance}% above target · ₹${(effectiveQuote - order.targetPrice).toFixed(0)}/pc over · can approve with justification`
-                        : `${variance}% above target · ₹${(effectiveQuote - order.targetPrice).toFixed(0)}/pc over · escalation required`}
+                        ? `Within target · ₹${Math.abs(variance * order.targetPrice / 100).toFixed(0)} headroom · approval: ${routing.role}`
+                        : `${variance}% above target · ₹${(effectiveQuote - order.targetPrice).toFixed(0)}/pc over · approval: ${routing.role}`}
                     </span>
                     <span className="ml-auto font-bold">
                       Order impact: ₹{Math.abs((effectiveQuote - order.targetPrice) * order.orderQty).toLocaleString()}
@@ -1666,8 +1787,12 @@ function CostingTab({ order }: { order: SubOrder }) {
                       Counter-Propose
                     </button>
                     <button onClick={() => setAction('escalate')}
-                      className="flex-1 py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-50 transition-colors">
-                      Escalate to Manager
+                      className={cn('flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors border',
+                        routing?.colour === 'amber'
+                          ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                          : 'border-red-200 text-red-600 hover:bg-red-50'
+                      )}>
+                      {routing?.colour === 'amber' ? 'Send to Sourcing Manager' : 'Send to Category Head'}
                     </button>
                   </>
                 )}
@@ -1676,7 +1801,13 @@ function CostingTab({ order }: { order: SubOrder }) {
                     quoteInput ? 'bg-violet-600 text-white hover:bg-violet-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                   )}>
                   <CheckCircle2 className="w-4 h-4" />
-                  {isSubmitted ? 'Approve Costing' : variance !== null && variance > 5 ? 'Submit & Escalate' : 'Submit & Approve'}
+                  {isSubmitted
+                    ? variance !== null && variance <= 0
+                      ? 'Approve Costing'
+                      : variance !== null && variance <= 5
+                      ? 'Submit to Sourcing Manager'
+                      : 'Submit to Category Head'
+                    : 'Submit Quote'}
                 </button>
               </div>
             </div>
@@ -1715,22 +1846,34 @@ function CostingTab({ order }: { order: SubOrder }) {
 
           {/* Escalate form */}
           {action === 'escalate' && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
-              <p className="text-xs font-semibold text-red-800">Escalate to Sourcing Manager</p>
-              <p className="text-xs text-red-600">The manager will be notified and can override-approve or reject the quote.</p>
+            <div className={cn('rounded-xl p-4 space-y-3 border',
+              routing?.colour === 'amber' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
+            )}>
+              <p className={cn('text-xs font-semibold', routing?.colour === 'amber' ? 'text-amber-800' : 'text-red-800')}>
+                Send to {routing?.role ?? 'Approver'} for Review
+              </p>
+              <p className={cn('text-xs', routing?.colour === 'amber' ? 'text-amber-700' : 'text-red-600')}>
+                {routing?.colour === 'amber'
+                  ? 'Quote is 0–5% above target. Sourcing Manager can approve or ask vendor to resubmit.'
+                  : 'Quote is more than 5% above target. Category Head approval is required.'}
+              </p>
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Escalation Notes <span className="text-red-500">*</span></label>
                 <textarea value={escalateNotes} onChange={e => setEscalateNotes(e.target.value)} rows={2}
-                  placeholder="Why is this being escalated? What's the context the manager needs?"
-                  className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-400 resize-none" />
+                  placeholder={`Context for the ${routing?.role ?? 'approver'} — reason for variance, vendor justification, etc.`}
+                  className={cn('w-full rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 resize-none border',
+                    routing?.colour === 'amber' ? 'border-amber-200 focus:ring-amber-400' : 'border-red-200 focus:ring-red-400'
+                  )} />
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setAction('idle')} className="flex-1 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 font-medium bg-white hover:bg-slate-50">Cancel</button>
                 <button onClick={() => setAction('done')} disabled={!escalateNotes}
                   className={cn('flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5',
-                    escalateNotes ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    escalateNotes
+                      ? routing?.colour === 'amber' ? 'bg-amber-600 text-white hover:bg-amber-700' : 'bg-red-600 text-white hover:bg-red-700'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                   )}>
-                  <AlertTriangle className="w-3 h-3" /> Send Escalation
+                  <AlertTriangle className="w-3 h-3" /> Send to {routing?.role ?? 'Approver'}
                 </button>
               </div>
             </div>
@@ -1743,12 +1886,16 @@ function CostingTab({ order }: { order: SubOrder }) {
         <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
           <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
           <p className="font-bold text-green-800 text-base">
-            {latestRound?.status === 'approved' ? 'Costing Approved!' : latestRound?.status === 'escalated' ? 'Escalated to Manager' : 'Action Recorded'}
+            {latestRound?.status === 'approved'
+              ? 'Costing Approved!'
+              : latestRound?.status === 'escalated'
+              ? `Sent to ${routing?.role ?? 'Approver'}`
+              : 'Action Recorded'}
           </p>
           <p className="text-xs text-green-600 mt-1">
             {latestRound?.status === 'approved'
               ? `Approved at ₹${latestRound.quote}/pc · Order value ₹${(latestRound.quote * order.orderQty).toLocaleString()}`
-              : 'The manager will review and take action.'}
+              : `${routing?.role ?? 'Approver'} will review and can approve or ask the vendor to resubmit.`}
           </p>
         </div>
       )}

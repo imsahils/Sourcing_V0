@@ -17,10 +17,13 @@ import { cn } from '@/lib/utils'
 import {
   type CostStatus,
   type VendorCostOrder,
+  type OpenCostingBreakdown,
+  deriveOpenCostingTotals,
   VENDOR_NAME_TO_KEY,
   VENDOR_COSTING_ORDERS,
   resolveVendorKey,
 } from '@/lib/vendor-costing'
+import { useCostingStore } from '@/lib/costing-store'
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -47,7 +50,175 @@ function DaysChip({ dateStr, label }: { dateStr: string; label?: string }) {
 
 // ─── Vendor Costing Modal (vendor submits their own prices) ───────────────────
 
-type BDraft = { fabric: string; cmt: string; trims: string; print: string; packaging: string; other: string }
+// Open costing draft — string values for React controlled inputs
+type OCDraft = {
+  mainFabricPrice: string; mainFabricConsumption: string
+  trimFabricPrice: string; trimFabricConsumption: string
+  trimCostThread: string; cmp: string; valueAddition: string
+  testing: string; logistic: string
+  rejectionPct: string; marginPct: string
+}
+
+const EMPTY_OC_DRAFT: OCDraft = {
+  mainFabricPrice: '', mainFabricConsumption: '',
+  trimFabricPrice: '', trimFabricConsumption: '',
+  trimCostThread: '', cmp: '', valueAddition: '',
+  testing: '', logistic: '', rejectionPct: '', marginPct: '',
+}
+
+function draftFromBreakdown(b: OpenCostingBreakdown): OCDraft {
+  return {
+    mainFabricPrice:       String(b.mainFabricPrice),
+    mainFabricConsumption: String(b.mainFabricConsumption),
+    trimFabricPrice:       String(b.trimFabricPrice),
+    trimFabricConsumption: String(b.trimFabricConsumption),
+    trimCostThread:        String(b.trimCostThread),
+    cmp:                   String(b.cmp),
+    valueAddition:         String(b.valueAddition),
+    testing:               String(b.testing),
+    logistic:              String(b.logistic),
+    rejectionPct:          String(b.rejectionPct),
+    marginPct:             String(b.marginPct),
+  }
+}
+
+function draftToBreakdown(d: OCDraft): OpenCostingBreakdown {
+  const n = (v: string) => parseFloat(v) || 0
+  return {
+    mainFabricPrice: n(d.mainFabricPrice), mainFabricConsumption: n(d.mainFabricConsumption),
+    trimFabricPrice: n(d.trimFabricPrice), trimFabricConsumption: n(d.trimFabricConsumption),
+    trimCostThread: n(d.trimCostThread), cmp: n(d.cmp), valueAddition: n(d.valueAddition),
+    testing: n(d.testing), logistic: n(d.logistic),
+    rejectionPct: n(d.rejectionPct), marginPct: n(d.marginPct),
+  }
+}
+
+function calcOCTotal(d: OCDraft): number {
+  return deriveOpenCostingTotals(draftToBreakdown(d)).openCostingTotal
+}
+
+function OpenCostingFormFields({ draft, setDraft }: {
+  draft: OCDraft
+  setDraft: (d: OCDraft) => void
+}) {
+  const n = (v: string) => parseFloat(v) || 0
+  const mainFabricCost = n(draft.mainFabricPrice) * n(draft.mainFabricConsumption)
+  const trimFabricCost = n(draft.trimFabricPrice) * n(draft.trimFabricConsumption)
+  const ttlFabric      = mainFabricCost + trimFabricCost
+  const ttlProduct     = ttlFabric + n(draft.trimCostThread) + n(draft.cmp) + n(draft.valueAddition)
+  const rejAmt         = ttlProduct * (n(draft.rejectionPct) / 100)
+  const mrgAmt         = ttlProduct * (n(draft.marginPct) / 100)
+  const set = (k: keyof OCDraft) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setDraft({ ...draft, [k]: e.target.value })
+
+  return (
+    <div className="space-y-4">
+      {/* Fabric */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Fabric</p>
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Main Fabric Price (₹/m)</label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft.mainFabricPrice} onChange={set('mainFabricPrice')} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+              <input type="number" value={draft.mainFabricConsumption} onChange={set('mainFabricConsumption')} placeholder="0.00"
+                className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+            </div>
+            <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[72px]">
+              <p className="text-[9px] text-slate-400">Main Fabric</p>
+              <p className="text-sm font-bold text-violet-700">₹{mainFabricCost.toFixed(2)}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Trim Fabric Price (₹/m)</label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft.trimFabricPrice} onChange={set('trimFabricPrice')} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">Consumption (m)</label>
+              <input type="number" value={draft.trimFabricConsumption} onChange={set('trimFabricConsumption')} placeholder="0.00"
+                className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+            </div>
+            <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-right min-w-[72px]">
+              <p className="text-[9px] text-slate-400">Trim Fabric</p>
+              <p className="text-sm font-bold text-violet-700">₹{trimFabricCost.toFixed(2)}</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <div className="bg-slate-800 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <span className="opacity-70">TTL Fabric Cost</span>
+            <span className="font-bold">₹{ttlFabric.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Processing */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Processing</p>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            { k: 'trimCostThread' as const, label: 'Trim + Thread', hint: 'buttons, labels, thread' },
+            { k: 'cmp'            as const, label: 'CMP',           hint: 'cut, make, pack' },
+            { k: 'valueAddition'  as const, label: 'Value Addition',hint: 'embroidery, print' },
+          ]).map(({ k, label, hint }) => (
+            <div key={k}>
+              <label className="text-[10px] text-slate-400 block mb-1">{label} <span className="text-slate-300">({hint})</span></label>
+              <div className="relative"><span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>
+                <input type="number" value={draft[k]} onChange={set(k)} placeholder="0"
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-2 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex justify-end">
+          <div className="bg-slate-800 text-white rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <span className="opacity-70">TTL Product Cost</span>
+            <span className="font-bold">₹{ttlProduct.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Overheads */}
+      <div>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Overheads & Margins</p>
+        <div className="grid grid-cols-2 gap-2">
+          {([
+            { k: 'testing'  as const, label: 'Testing (₹)',  suffix: '₹', isRs: true  },
+            { k: 'logistic' as const, label: 'Logistic (₹)', suffix: '₹', isRs: true  },
+            { k: 'rejectionPct' as const, label: 'Rejection %', suffix: '%', isRs: false },
+            { k: 'marginPct'    as const, label: 'Margin %',    suffix: '%', isRs: false },
+          ]).map(({ k, label, suffix, isRs }) => (
+            <div key={k}>
+              <label className="text-[10px] text-slate-400 block mb-1">{label}</label>
+              <div className="relative">
+                {isRs && <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">₹</span>}
+                <input type="number" value={draft[k]} onChange={set(k)} placeholder="0"
+                  className={cn('w-full text-xs border border-slate-200 rounded-lg py-2 focus:outline-none focus:ring-1 focus:ring-violet-400',
+                    isRs ? 'pl-6 pr-2' : 'pl-3 pr-6')} />
+                {!isRs && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">%</span>}
+              </div>
+              {!isRs && draft[k] && (
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  = ₹{(ttlProduct * (parseFloat(draft[k]) || 0) / 100).toFixed(2)}/pc
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function VendorCostModal({
   order,
@@ -56,32 +227,20 @@ function VendorCostModal({
 }: {
   order: VendorCostOrder
   onClose: () => void
-  onSubmit: (id: string, cost: number, bd: NonNullable<VendorCostOrder['breakdown']>, notes: string, promisedDate: string) => void
+  onSubmit: (id: string, cost: number, bd: OpenCostingBreakdown, notes: string, promisedDate: string) => void
 }) {
-  const existing = order.breakdown
-  const [draft, setDraft] = useState<BDraft>({
-    fabric:    existing ? String(existing.fabric)    : '',
-    cmt:       existing ? String(existing.cmt)       : '',
-    trims:     existing ? String(existing.trims)     : '',
-    print:     existing ? String(existing.print)     : '0',
-    packaging: existing ? String(existing.packaging) : '',
-    other:     existing ? String(existing.other)     : '0',
-  })
+  const [draft, setDraft]               = useState<OCDraft>(order.breakdown ? draftFromBreakdown(order.breakdown) : EMPTY_OC_DRAFT)
   const [notes, setNotes]               = useState(order.notes || '')
   const [promisedDate, setPromisedDate] = useState(order.promisedInwardDate ?? '')
   const [submitted, setSubmit]          = useState(false)
 
-  const n = (v: string) => parseFloat(v) || 0
-  const total = n(draft.fabric) + n(draft.cmt) + n(draft.trims) + n(draft.print) + n(draft.packaging) + n(draft.other)
+  const total = calcOCTotal(draft)
 
   const handleSubmit = () => {
     if (total <= 0) return
     setSubmit(true)
     setTimeout(() => {
-      onSubmit(order.id, total, {
-        fabric: n(draft.fabric), cmt: n(draft.cmt), trims: n(draft.trims),
-        print: n(draft.print), packaging: n(draft.packaging), other: n(draft.other),
-      }, notes, promisedDate)
+      onSubmit(order.id, total, draftToBreakdown(draft), notes, promisedDate)
       onClose()
     }, 1200)
   }
@@ -102,15 +261,6 @@ function VendorCostModal({
     )
   }
 
-  const fields: { key: keyof BDraft; label: string; hint: string }[] = [
-    { key: 'fabric',    label: 'Fabric Cost',        hint: 'Yarn / fabric / lining per piece' },
-    { key: 'cmt',       label: 'CMT Charges',         hint: 'Cut, Make, Trim — labour cost' },
-    { key: 'trims',     label: 'Trims & Accessories', hint: 'Buttons, zippers, labels, patches' },
-    { key: 'print',     label: 'Print / Embroidery',  hint: 'Enter 0 if not applicable' },
-    { key: 'packaging', label: 'Packaging',           hint: 'Polybag, hanger, stickers' },
-    { key: 'other',     label: 'Other Charges',       hint: 'Transport, overheads, misc' },
-  ]
-
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
@@ -125,7 +275,7 @@ function VendorCostModal({
         </div>
 
         <div className="px-6 py-5 space-y-5">
-          {/* Reference strip — no buyer target shown to vendor */}
+          {/* Reference strip — target price NOT shown to vendor */}
           <div className="grid grid-cols-2 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
             <div>
               <p className="text-xs text-slate-500 mb-0.5">Order Qty</p>
@@ -143,36 +293,20 @@ function VendorCostModal({
 
           <div className="flex gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2.5 text-xs text-violet-700">
             <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            Enter your <strong className="mx-0.5">per-piece cost</strong> breakdown. The buyer sees each component, so be as accurate as possible.
+            Fill in your <strong className="mx-0.5">open costing</strong> — fabric, processing, and overhead details. Your total will be calculated automatically.
           </div>
 
-          {/* Breakdown fields */}
-          <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Your Cost Breakdown (₹ / piece)</p>
-            {fields.map(({ key, label, hint }) => (
-              <div key={key} className="flex items-center gap-3">
-                <div className="flex-1">
-                  <p className="text-xs font-medium text-slate-700">{label}</p>
-                  <p className="text-xs text-slate-400">{hint}</p>
-                </div>
-                <div className="relative w-28">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                  <input
-                    type="number" min="0" step="0.5" value={draft[key]}
-                    onChange={e => setDraft(p => ({ ...p, [key]: e.target.value }))}
-                    className="w-full pl-7 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 text-right"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+          <OpenCostingFormFields draft={draft} setDraft={setDraft} />
 
           {/* Running total */}
           {total > 0 && (
-            <div className="bg-slate-50 rounded-xl px-4 py-3 flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-700">Your Total Quote</p>
-              <p className="text-2xl font-black text-slate-900">₹{total.toFixed(0)} <span className="text-xs font-normal text-slate-400">per piece</span></p>
+            <div className={cn('rounded-xl px-4 py-3 flex items-center justify-between',
+              'bg-slate-900 text-white'
+            )}>
+              <div>
+                <p className="text-[10px] font-medium opacity-70">Your Total Quote / piece</p>
+                <p className="text-xl font-black">₹{total.toFixed(0)}</p>
+              </div>
             </div>
           )}
 
@@ -186,26 +320,14 @@ function VendorCostModal({
                 {new Date(order.inwardDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
               </strong>
             </p>
-            <input
-              type="date"
-              value={promisedDate}
-              min={new Date().toISOString().split('T')[0]}
+            <input type="date" value={promisedDate} min={new Date().toISOString().split('T')[0]}
               onChange={e => setPromisedDate(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
-            />
+              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white" />
             {promisedDate && (() => {
-              const buyerDate  = new Date(order.inwardDate)
-              const vendorDate = new Date(promisedDate)
-              const diffDays   = Math.ceil((vendorDate.getTime() - buyerDate.getTime()) / 86400000)
-              if (diffDays === 0) return (
-                <p className="text-xs text-green-600 font-medium mt-1.5">✓ Matches buyer inward date</p>
-              )
-              if (diffDays < 0) return (
-                <p className="text-xs text-green-600 font-medium mt-1.5">✓ {Math.abs(diffDays)}d ahead of buyer inward date</p>
-              )
-              return (
-                <p className="text-xs text-amber-600 font-medium mt-1.5">⚠ {diffDays}d after buyer inward date — buyer may request an earlier commitment</p>
-              )
+              const diff = Math.ceil((new Date(promisedDate).getTime() - new Date(order.inwardDate).getTime()) / 86400000)
+              if (diff === 0) return <p className="text-xs text-green-600 font-medium mt-1.5">✓ Matches buyer inward date</p>
+              if (diff < 0) return <p className="text-xs text-green-600 font-medium mt-1.5">✓ {Math.abs(diff)}d ahead of buyer inward date</p>
+              return <p className="text-xs text-amber-600 font-medium mt-1.5">⚠ {diff}d after buyer inward date — buyer may request an earlier commitment</p>
             })()}
           </div>
 
@@ -214,22 +336,16 @@ function VendorCostModal({
             <label className="text-xs font-medium text-slate-700 block mb-1.5">
               Justification / Remarks <span className="text-xs text-slate-400">(optional)</span>
             </label>
-            <textarea
-              value={notes} onChange={e => setNotes(e.target.value)} rows={3}
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
               placeholder="Explain any cost drivers — fabric quality, print complexity, low MOQ surcharge…"
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none text-slate-700 placeholder:text-slate-400"
-            />
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none text-slate-700 placeholder:text-slate-400" />
           </div>
         </div>
 
         <div className="sticky bottom-0 bg-white border-t border-slate-100 px-6 py-4 flex gap-3 rounded-b-2xl">
-          <button onClick={onClose}
-            className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 font-medium hover:bg-slate-50">
-            Cancel
-          </button>
+          <button onClick={onClose} className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
           <button onClick={handleSubmit} disabled={total <= 0}
-            className={cn(
-              'flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all',
+            className={cn('flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all',
               total > 0 ? 'bg-violet-600 text-white hover:bg-violet-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
             )}>
             <Send className="w-3.5 h-3.5" /> Submit to Buyer
@@ -522,7 +638,7 @@ function RFQResponseModal({
   onDecline: (id: string, reason: string) => void
 }) {
   const [mode, setMode]         = useState<'respond' | 'decline'>('respond')
-  const [price, setPrice]       = useState('')
+  const [draft, setDraft]       = useState<OCDraft>(EMPTY_OC_DRAFT)
   const [date, setDate]         = useState('')
   const [leadTime, setLeadTime] = useState('')
   const [capacity, setCapacity] = useState(String(rfq.orderQty))
@@ -530,10 +646,12 @@ function RFQResponseModal({
   const [reason, setReason]     = useState('')
   const [done, setDone]         = useState(false)
 
+  const total = calcOCTotal(draft)
+
   const handleSubmit = () => {
-    if (!price || !date || !capacity) return
+    if (total <= 0 || !date || !capacity) return
     setDone(true)
-    setTimeout(() => onSubmit(rfq.id, Number(price), date, Number(leadTime) || 0, Number(capacity), notes), 1200)
+    setTimeout(() => onSubmit(rfq.id, total, date, Number(leadTime) || 0, Number(capacity), notes), 1200)
   }
 
   const handleDecline = () => {
@@ -571,7 +689,7 @@ function RFQResponseModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          {/* Style brief */}
+          {/* Style brief — target price NOT shown to vendor */}
           <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Order Details</p>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
@@ -581,7 +699,6 @@ function RFQResponseModal({
                 ['Category', rfq.category],
                 ['Fabric', rfq.fabricQuality],
                 ['Order Qty', `${rfq.orderQty} pcs`],
-                ['Target Price', `₹${rfq.targetPrice}/pc`],
                 ['Handover Date', new Date(rfq.handoverDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })],
                 ['Expires', new Date(rfq.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })],
               ].map(([l, v]) => (
@@ -619,35 +736,43 @@ function RFQResponseModal({
 
           {mode === 'respond' ? (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Quoted Price (₹/pc) *</label>
-                  <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="e.g. 255"
-                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-                  {price && Number(price) > rfq.targetPrice && (
-                    <p className="text-xs text-red-500 mt-1">₹{Number(price) - rfq.targetPrice} above target</p>
-                  )}
-                  {price && Number(price) <= rfq.targetPrice && (
-                    <p className="text-xs text-green-600 mt-1">₹{rfq.targetPrice - Number(price)} below target</p>
-                  )}
+              <div className="flex gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2.5 text-xs text-violet-700">
+                <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                Fill in your <strong className="mx-0.5">open costing</strong> below. Your total quote will be calculated automatically.
+              </div>
+
+              <OpenCostingFormFields draft={draft} setDraft={setDraft} />
+
+              {/* Total */}
+              {total > 0 && (
+                <div className="bg-slate-900 text-white rounded-xl px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-medium opacity-70">Your Total Quote / piece</p>
+                    <p className="text-xl font-black">₹{total.toFixed(0)}</p>
+                  </div>
                 </div>
+              )}
+
+              {/* Capacity + Date + Lead Time */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-slate-700 block mb-1.5">Capacity (pcs) *</label>
                   <input type="number" value={capacity} onChange={e => setCapacity(e.target.value)}
                     className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">Promised Delivery Date *</label>
-                  <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  {capacity && Number(capacity) < rfq.orderQty && (
+                    <p className="text-xs text-amber-600 mt-1">⚠ {rfq.orderQty - Number(capacity)} pcs short — order may be split</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-slate-700 block mb-1.5">Lead Time (days)</label>
                   <input type="number" value={leadTime} onChange={e => setLeadTime(e.target.value)} placeholder="e.g. 60"
                     className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
                 </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1.5">Promised Delivery Date *</label>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1.5">Notes (optional)</label>
@@ -667,7 +792,7 @@ function RFQResponseModal({
         <div className="px-6 py-4 border-t border-slate-200 flex justify-between flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
           {mode === 'respond' ? (
-            <button onClick={handleSubmit} disabled={!price || !date || !capacity}
+            <button onClick={handleSubmit} disabled={total <= 0 || !date || !capacity}
               className="px-5 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-40 flex items-center gap-1.5">
               <Send className="w-3.5 h-3.5" />Submit Quote
             </button>
@@ -915,9 +1040,33 @@ function VendorView() {
   const companyName = currentUser.department
   const vendorKey   = resolveVendorKey(vendorId, companyName)
 
-  // Costing orders assigned to this vendor
-  const initialCostOrders = VENDOR_COSTING_ORDERS[vendorKey] ?? []
-  const [costOrders, setCostOrders] = useState<VendorCostOrder[]>(initialCostOrders)
+  // Pull from shared costing store
+  const { orders: allOrders, rfqs: storeRFQs, vendorSubmitRFQ } = useCostingStore()
+  const storeVendorOrders = allOrders.filter(o => o.vendorId === vendorKey || o.vendorId === vendorId)
+
+  // Costing orders assigned to this vendor — derive from store or fall back to mock
+  const [costOrders, setCostOrders] = useState<VendorCostOrder[]>(() => {
+    if (storeVendorOrders.length > 0) {
+      return storeVendorOrders.map(o => ({
+        id: o.id,
+        styleCode: o.styleCode,
+        styleName: o.styleName,
+        colour: o.colour,
+        category: o.category,
+        orderQty: o.orderQty,
+        targetPrice: o.targetPrice,
+        costStatus: o.costStatus as VendorCostOrder['costStatus'],
+        inwardDate: o.buyingExpectedDate,
+        costingDueDate: o.vendorTargetDate,
+        submittedCost: o.submittedCost,
+        breakdown: o.breakdown,
+        notes: o.notes,
+        pocName: 'Parthipan Kumar',
+        promisedInwardDate: o.confirmedInwardDate,
+      }))
+    }
+    return VENDOR_COSTING_ORDERS[vendorKey] ?? []
+  })
   const [costModal, setCostModal]   = useState<string | null>(null)
 
   // All orders for this vendor
@@ -964,6 +1113,12 @@ function VendorView() {
   const approved     = costOrders.filter(o => o.costStatus === 'approved').length
 
   const handleSubmitCost = (id: string, cost: number, bd: NonNullable<VendorCostOrder['breakdown']>, notes: string, promisedDate: string) => {
+    // Find matching RFQ in the store and update it
+    const matchingRFQ = storeRFQs.find(r => r.orderId === id && r.status !== 'cancelled')
+    if (matchingRFQ) {
+      vendorSubmitRFQ(matchingRFQ.id, cost, bd, notes, promisedDate)
+    }
+    // Also update local state for immediate UI feedback
     setCostOrders(prev => prev.map(o => o.id !== id ? o : {
       ...o, submittedCost: cost, breakdown: bd, notes, costStatus: 'submitted',
       promisedInwardDate: promisedDate || undefined,
@@ -1107,26 +1262,31 @@ function VendorView() {
                       </div>
 
                       {/* Submitted breakdown preview */}
-                      {order.breakdown && (
-                        <div className="mb-3 bg-violet-50 rounded-xl px-3 py-2.5">
-                          <p className="text-xs font-semibold text-violet-700 mb-1.5">Your submitted breakdown</p>
-                          <div className="grid grid-cols-3 gap-x-4 gap-y-1">
-                            {[
-                              { label: 'Fabric',    val: order.breakdown.fabric },
-                              { label: 'CMT',       val: order.breakdown.cmt },
-                              { label: 'Trims',     val: order.breakdown.trims },
-                              { label: 'Print',     val: order.breakdown.print },
-                              { label: 'Packaging', val: order.breakdown.packaging },
-                              { label: 'Other',     val: order.breakdown.other },
-                            ].map(({ label, val }) => val > 0 && (
-                              <div key={label} className="flex justify-between text-xs">
-                                <span className="text-violet-600">{label}</span>
-                                <span className="font-medium text-violet-800">₹{val}</span>
-                              </div>
-                            ))}
+                      {order.breakdown && (() => {
+                        const t = deriveOpenCostingTotals(order.breakdown)
+                        return (
+                          <div className="mb-3 bg-violet-50 rounded-xl px-3 py-2.5">
+                            <p className="text-xs font-semibold text-violet-700 mb-1.5">Your submitted breakdown</p>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                              {[
+                                { label: 'TTL Fabric',    val: t.ttlFabricCost },
+                                { label: 'CMP',           val: order.breakdown.cmp },
+                                { label: 'Trim + Thread', val: order.breakdown.trimCostThread },
+                                { label: 'Value Addition',val: order.breakdown.valueAddition },
+                                { label: 'Testing',       val: order.breakdown.testing },
+                                { label: 'Logistic',      val: order.breakdown.logistic },
+                                { label: `Rejection ${order.breakdown.rejectionPct}%`, val: t.rejectionAmt },
+                                { label: `Margin ${order.breakdown.marginPct}%`,       val: t.marginAmt },
+                              ].map(({ label, val }) => val > 0 && (
+                                <div key={label} className="flex justify-between text-xs">
+                                  <span className="text-violet-600">{label}</span>
+                                  <span className="font-medium text-violet-800">₹{val.toFixed(2)}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )
+                      })()}
 
                       {order.notes && (
                         <p className="text-xs text-slate-500 italic mb-3">"{order.notes}"</p>

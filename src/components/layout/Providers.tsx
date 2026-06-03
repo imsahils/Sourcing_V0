@@ -2,13 +2,16 @@
 import { UserProvider } from '@/lib/user-context'
 import { SidebarProvider } from '@/lib/sidebar-context'
 import { ThemeProvider } from '@/lib/theme-context'
+import { CostingStoreProvider } from '@/lib/costing-store'
 import type { ReactNode } from 'react'
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <SidebarProvider>
-        <UserProvider>{children}</UserProvider>
+        <UserProvider>
+          <CostingStoreProvider>{children}</CostingStoreProvider>
+        </UserProvider>
       </SidebarProvider>
     </ThemeProvider>
   )

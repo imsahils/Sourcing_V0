@@ -12,8 +12,10 @@ import { cn } from '@/lib/utils'
 import { useCurrentUser } from '@/lib/user-context'
 import {
   type VendorCostOrder,
+  type OpenCostingBreakdown,
   VENDOR_COSTING_ORDERS,
   resolveVendorKey,
+  deriveOpenCostingTotals,
 } from '@/lib/vendor-costing'
 import {
   type DPREntry,
@@ -613,7 +615,38 @@ function CellBar({ value, total, color }: { value: number; total: number; color:
   )
 }
 
-type BDraft = { fabric: string; cmt: string; trims: string; print: string; packaging: string; other: string }
+type BDraft = {
+  mainFabricPrice: string; mainFabricConsumption: string
+  trimFabricPrice: string; trimFabricConsumption: string
+  trimCostThread: string; cmp: string; valueAddition: string
+  testing: string; logistic: string
+  rejectionPct: string; marginPct: string
+}
+const EMPTY_BDRAFT: BDraft = {
+  mainFabricPrice: '', mainFabricConsumption: '',
+  trimFabricPrice: '', trimFabricConsumption: '',
+  trimCostThread: '', cmp: '', valueAddition: '',
+  testing: '', logistic: '', rejectionPct: '', marginPct: '',
+}
+function bDraftFromBreakdown(b: OpenCostingBreakdown): BDraft {
+  return {
+    mainFabricPrice: String(b.mainFabricPrice), mainFabricConsumption: String(b.mainFabricConsumption),
+    trimFabricPrice: String(b.trimFabricPrice), trimFabricConsumption: String(b.trimFabricConsumption),
+    trimCostThread: String(b.trimCostThread), cmp: String(b.cmp), valueAddition: String(b.valueAddition),
+    testing: String(b.testing), logistic: String(b.logistic),
+    rejectionPct: String(b.rejectionPct), marginPct: String(b.marginPct),
+  }
+}
+function bDraftToBreakdown(d: BDraft): OpenCostingBreakdown {
+  const n = (v: string) => parseFloat(v) || 0
+  return {
+    mainFabricPrice: n(d.mainFabricPrice), mainFabricConsumption: n(d.mainFabricConsumption),
+    trimFabricPrice: n(d.trimFabricPrice), trimFabricConsumption: n(d.trimFabricConsumption),
+    trimCostThread: n(d.trimCostThread), cmp: n(d.cmp), valueAddition: n(d.valueAddition),
+    testing: n(d.testing), logistic: n(d.logistic),
+    rejectionPct: n(d.rejectionPct), marginPct: n(d.marginPct),
+  }
+}
 
 function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUserName, vendorView }: VendorDPRViewProps) {
   // Match by DB UUID if available, fallback to case-insensitive name match
@@ -631,22 +664,14 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
   const [quoteDrawer, setQuoteDrawer] = useState<string | null>(null)
   const quoteOrder = quoteDrawer ? costOrders.find(o => o.id === quoteDrawer) ?? null : null
 
-  const [bDraft, setBDraft]           = useState<BDraft>({ fabric:'', cmt:'', trims:'', print:'0', packaging:'', other:'0' })
+  const [bDraft, setBDraft]           = useState<BDraft>(EMPTY_BDRAFT)
   const [bNotes, setBNotes]           = useState('')
   const [bPromisedDate, setBPromisedDate] = useState('')
   const [quoteSubmitting, setQuoteSubmitting] = useState(false)
   const [quoteSuccess, setQuoteSuccess]       = useState(false)
 
   function openQuote(order: VendorCostOrder) {
-    const ex = order.breakdown
-    setBDraft({
-      fabric:    ex ? String(ex.fabric)    : '',
-      cmt:       ex ? String(ex.cmt)       : '',
-      trims:     ex ? String(ex.trims)     : '',
-      print:     ex ? String(ex.print)     : '0',
-      packaging: ex ? String(ex.packaging) : '',
-      other:     ex ? String(ex.other)     : '0',
-    })
+    setBDraft(order.breakdown ? bDraftFromBreakdown(order.breakdown) : EMPTY_BDRAFT)
     setBNotes(order.notes ?? '')
     setBPromisedDate(order.promisedInwardDate ?? '')
     setQuoteSuccess(false)
@@ -655,8 +680,8 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
 
   function submitQuote() {
     if (!quoteOrder) return
-    const n = (v: string) => parseFloat(v) || 0
-    const total = n(bDraft.fabric) + n(bDraft.cmt) + n(bDraft.trims) + n(bDraft.print) + n(bDraft.packaging) + n(bDraft.other)
+    const breakdown = bDraftToBreakdown(bDraft)
+    const total = deriveOpenCostingTotals(breakdown).openCostingTotal
     if (total <= 0) return
     setQuoteSubmitting(true)
     setTimeout(() => {
@@ -664,7 +689,7 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
         ...o,
         costStatus: 'submitted',
         submittedCost: total,
-        breakdown: { fabric: n(bDraft.fabric), cmt: n(bDraft.cmt), trims: n(bDraft.trims), print: n(bDraft.print), packaging: n(bDraft.packaging), other: n(bDraft.other) },
+        breakdown,
         notes: bNotes,
         promisedInwardDate: bPromisedDate || undefined,
       }))
@@ -673,13 +698,18 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
     }, 1200)
   }
 
-  const bFields: { key: keyof BDraft; label: string; hint: string }[] = [
-    { key: 'fabric',    label: 'Fabric Cost',         hint: 'Yarn / fabric / lining per piece' },
-    { key: 'cmt',       label: 'CMT Charges',          hint: 'Cut, Make, Trim — labour cost' },
-    { key: 'trims',     label: 'Trims & Accessories',  hint: 'Buttons, zippers, labels, patches' },
-    { key: 'print',     label: 'Print / Embroidery',   hint: 'Enter 0 if not applicable' },
-    { key: 'packaging', label: 'Packaging',            hint: 'Polybag, hanger, stickers' },
-    { key: 'other',     label: 'Other Charges',        hint: 'Transport, overheads, misc' },
+  const bFields: { key: keyof BDraft; label: string; hint: string; isRs: boolean }[] = [
+    { key: 'mainFabricPrice',       label: 'Main Fabric Price (₹/m)', hint: 'Price per metre',               isRs: true  },
+    { key: 'mainFabricConsumption', label: 'Main Consumption (m)',    hint: 'Metres per piece',              isRs: false },
+    { key: 'trimFabricPrice',       label: 'Trim Fabric Price (₹/m)', hint: 'Price per metre',               isRs: true  },
+    { key: 'trimFabricConsumption', label: 'Trim Consumption (m)',    hint: 'Metres per piece',              isRs: false },
+    { key: 'trimCostThread',        label: 'Trim + Thread (₹)',       hint: 'Buttons, labels, thread',       isRs: true  },
+    { key: 'cmp',                   label: 'CMP (₹)',                 hint: 'Cut, make, pack',               isRs: true  },
+    { key: 'valueAddition',         label: 'Value Addition (₹)',      hint: 'Embroidery, print — 0 if none', isRs: true  },
+    { key: 'testing',               label: 'Testing (₹)',             hint: 'Lab test charges',              isRs: true  },
+    { key: 'logistic',              label: 'Logistic (₹)',            hint: 'Freight charges',               isRs: true  },
+    { key: 'rejectionPct',          label: 'Rejection %',             hint: '% on total product cost',       isRs: false },
+    { key: 'marginPct',             label: 'Margin %',                hint: '% on total product cost',       isRs: false },
   ]
 
   function costStatusBadge(s: VendorCostOrder['costStatus']) {
@@ -767,7 +797,7 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
     )
   }
 
-  const bTotal = ['fabric','cmt','trims','print','packaging','other'].reduce((s, k) => s + (parseFloat(bDraft[k as keyof BDraft]) || 0), 0)
+  const bTotal = deriveOpenCostingTotals(bDraftToBreakdown(bDraft)).openCostingTotal
   const pendingCost    = costOrders.filter(o => o.costStatus === 'pending').length
   const escalatedCost  = costOrders.filter(o => o.costStatus === 'escalated').length
 
@@ -840,16 +870,19 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
               const fmtDate = (d: string) =>
                 new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 
-              const breakdownRow = order.breakdown ? (
-                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
-                  {([['Fabric', order.breakdown.fabric], ['CMT', order.breakdown.cmt],
-                     ['Trims', order.breakdown.trims],   ['Print', order.breakdown.print],
-                     ['Packaging', order.breakdown.packaging], ['Other', order.breakdown.other],
-                  ] as [string, number][]).filter(([, v]) => v > 0).map(([label, val]) => (
-                    <span key={label}><span className="text-slate-400">{label} </span><span className="font-semibold">₹{val}</span></span>
-                  ))}
-                </div>
-              ) : null
+              const breakdownRow = order.breakdown ? (() => {
+                const t = deriveOpenCostingTotals(order.breakdown)
+                const processing = order.breakdown.trimCostThread + order.breakdown.cmp + order.breakdown.valueAddition
+                const overheads  = order.breakdown.testing + order.breakdown.logistic + t.rejectionAmt + t.marginAmt
+                return (
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
+                    {([['Fabric', t.ttlFabricCost], ['Processing', processing], ['Overheads', overheads]] as [string, number][])
+                      .filter(([, v]) => v > 0).map(([label, val]) => (
+                      <span key={label}><span className="text-slate-400">{label} </span><span className="font-semibold">₹{val.toFixed(0)}</span></span>
+                    ))}
+                  </div>
+                )
+              })() : null
 
               return (
                 <div key={order.id} className={cn('bg-white rounded-2xl border shadow-sm overflow-hidden', borderCls)}>
@@ -1300,29 +1333,38 @@ function VendorDPRView({ orders, vendorId, vendorName, onSubmitEntry, currentUse
 
                   <div className="flex gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2.5 text-xs text-violet-700">
                     <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                    Enter your <strong className="mx-0.5">per-piece cost</strong> breakdown. The buyer sees each component.
+                    Fill in your <strong className="mx-0.5">open costing</strong> — fabric, processing, and overheads. Total is calculated automatically.
                   </div>
 
-                  {/* Breakdown inputs */}
-                  <div className="space-y-3">
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Your Cost Breakdown (₹ / piece)</p>
-                    {bFields.map(({ key, label, hint }) => (
-                      <div key={key} className="flex items-center gap-3">
-                        <div className="flex-1">
-                          <p className="text-xs font-medium text-slate-700">{label}</p>
-                          <p className="text-xs text-slate-400">{hint}</p>
+                  {/* Open costing inputs */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Open Costing Breakdown</p>
+                    {bFields.map(({ key, label, hint, isRs }) => {
+                      const isPct = key === 'rejectionPct' || key === 'marginPct'
+                      const isM   = key === 'mainFabricConsumption' || key === 'trimFabricConsumption'
+                      return (
+                        <div key={key} className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <p className="text-xs font-medium text-slate-700">{label}</p>
+                            <p className="text-xs text-slate-400">{hint}</p>
+                          </div>
+                          <div className="relative w-28">
+                            {isRs && !isPct && !isM && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>}
+                            {isPct         && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">%</span>}
+                            {isM           && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">m</span>}
+                            <input
+                              type="number" min="0" step="0.01"
+                              value={bDraft[key]}
+                              onChange={e => setBDraft(p => ({ ...p, [key]: e.target.value }))}
+                              className={cn(
+                                'w-full py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 text-right',
+                                isRs && !isPct && !isM ? 'pl-7 pr-3' : 'pl-3 pr-7'
+                              )}
+                            />
+                          </div>
                         </div>
-                        <div className="relative w-28">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                          <input
-                            type="number" min="0" step="0.5"
-                            value={bDraft[key]}
-                            onChange={e => setBDraft(p => ({ ...p, [key]: e.target.value }))}
-                            className="w-full pl-7 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 text-right"
-                          />
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
 
                   {/* Running total */}
