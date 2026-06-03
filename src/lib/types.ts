@@ -91,6 +91,10 @@ export interface SubOrder {
 
   // Pre-production
   preProdStages: PreProdStage[]
+  preProdUnlocked?: boolean       // manually unlocked before costing approval
+  preProdUnlockReason?: string    // mandatory reason entered at unlock time
+  preProdUnlockedBy?: string      // name of person who last toggled it
+  preProdUnlockedAt?: string      // ISO date string
 
   // Production history
   productionHistory: ProductionEntry[]

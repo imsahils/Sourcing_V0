@@ -7,6 +7,7 @@ import {
   MapPin, Phone, Mail, BarChart3, Layers, Edit3,
   Plus, ExternalLink, User, Truck, ClipboardCheck,
   Building2, X, Info, Send, RotateCcw, Eye, ChevronDown, Upload, Search,
+  Zap, Lock, LockOpen,
 } from 'lucide-react'
 import { Header } from '@/components/layout/Header'
 import { ProgressStrip } from '@/components/suborder/ProgressStrip'
@@ -252,12 +253,201 @@ function FIRequestModal({ order, onClose }: { order: SubOrder; onClose: () => vo
   )
 }
 
+// ─── Pre-Prod Unlock Modal ────────────────────────────────────────────────────
+
+function PreProdUnlockModal({
+  onClose,
+  onConfirm,
+}: {
+  onClose: () => void
+  onConfirm: (reason: string) => void
+}) {
+  const [reason, setReason]   = useState('')
+  const [acked,  setAcked]    = useState(false)
+  const canSubmit = reason.trim().length > 0 && acked
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center">
+              <LockOpen className="w-4 h-4 text-amber-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-900">Unlock pre-production early</h2>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors">
+            <X className="w-4 h-4 text-slate-500" />
+          </button>
+        </div>
+
+        {/* Risk banner */}
+        <div className="mx-5 mt-4 flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-3">
+          <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700 leading-relaxed">
+            <span className="font-semibold">Vendor will proceed before costing is finalised.</span>
+            {' '}No PO can be raised until costing is approved. Any materials or work done by the vendor are at their own risk.
+          </p>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 py-4 space-y-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-700 block mb-1.5">
+              Reason for early unlock <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Tight inward date — vendor needs to start fabric approval now. Costing verbally agreed, paperwork pending."
+              className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder:text-slate-400"
+            />
+          </div>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={acked}
+              onChange={e => setAcked(e.target.checked)}
+              className="mt-0.5 accent-amber-500 w-3.5 h-3.5 flex-shrink-0"
+            />
+            <span className="text-xs text-slate-600 leading-relaxed">
+              I understand that vendor activities will proceed before costing is finalised, and this action will be recorded in the order history.
+            </span>
+          </label>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 bg-slate-50">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!canSubmit}
+            onClick={() => onConfirm(reason.trim())}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg transition-colors',
+              canSubmit
+                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+            )}
+          >
+            <LockOpen className="w-3.5 h-3.5" />
+            Unlock Pre-Production
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Pre-Prod Unlock Banner (shown in Overview tab) ───────────────────────────
+
+function PreProdUnlockBanner({
+  order,
+  unlocked,
+  unlockedBy,
+  unlockedAt,
+  unlockReason,
+  canToggle,
+  onUnlock,
+  onRelock,
+}: {
+  order: SubOrder
+  unlocked: boolean
+  unlockedBy?: string
+  unlockedAt?: string
+  unlockReason?: string
+  canToggle: boolean
+  onUnlock: () => void
+  onRelock: () => void
+}) {
+  // Only show when costing is not approved
+  if (order.costStatus === 'approved') return null
+
+  const fmtDate = (iso?: string) => {
+    if (!iso) return ''
+    return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+
+  if (!unlocked) {
+    return (
+      <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3.5 flex items-start gap-3">
+        <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Lock className="w-4 h-4 text-amber-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-amber-900">Pre-production is locked</p>
+          <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+            Costing is not yet approved. Pre-prod stages cannot be started until costing is closed,
+            unless manually unlocked by the POC or manager.
+          </p>
+        </div>
+        {canToggle && (
+          <button
+            onClick={onUnlock}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors whitespace-nowrap"
+          >
+            <LockOpen className="w-3.5 h-3.5" />
+            Unlock Pre-Production
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  // Unlocked state
+  return (
+    <div className="mb-4 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3.5">
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Zap className="w-4 h-4 text-amber-700" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-amber-900">Pre-production unlocked early</p>
+            <span className="text-[10px] bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-semibold">Costing pending</span>
+          </div>
+          {unlockedBy && (
+            <p className="text-xs text-amber-700 mt-0.5">
+              Unlocked by <span className="font-medium">{unlockedBy}</span>
+              {unlockedAt ? ` · ${fmtDate(unlockedAt)}` : ''}
+            </p>
+          )}
+          {unlockReason && (
+            <p className="text-xs text-amber-800 mt-1 italic leading-relaxed">"{unlockReason}"</p>
+          )}
+          <p className="text-xs text-amber-600 mt-1.5">
+            No PO can be raised until costing is approved.
+          </p>
+        </div>
+        {canToggle && (
+          <button
+            onClick={onRelock}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 bg-white rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            Re-lock
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Tab: Overview ────────────────────────────────────────────────────────────
 
-function OverviewTab({ order, onUpdateProduction, onRequestFI }: {
+function OverviewTab({ order, onUpdateProduction, onRequestFI, unlockBannerProps }: {
   order: SubOrder
   onUpdateProduction: () => void
   onRequestFI: () => void
+  unlockBannerProps?: React.ComponentProps<typeof PreProdUnlockBanner>
 }) {
   const qtyPct = order.orderQty > 0 ? Math.round((order.packedQty / order.orderQty) * 100) : 0
 
@@ -282,6 +472,10 @@ function OverviewTab({ order, onUpdateProduction, onRequestFI }: {
         </div>
       </div>
     )}
+
+    {/* Pre-prod unlock banner */}
+    {unlockBannerProps && <PreProdUnlockBanner {...unlockBannerProps} />}
+
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
       {/* Left col: Key info */}
       <div className="md:col-span-2 space-y-4">
@@ -613,6 +807,16 @@ function PreProdTab({ order }: { order: SubOrder }) {
 
   return (
     <div className="space-y-4">
+
+      {/* ── Unlocked-early pill ──────────────────────────────────────────────── */}
+      {order.preProdUnlocked && order.costStatus !== 'approved' && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+          <Zap className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+          <p className="text-xs text-amber-800 font-medium">
+            Unlocked early — costing not yet approved. Stages are accessible but vendor proceeds at their own risk.
+          </p>
+        </div>
+      )}
 
       {/* ── Progress header ─────────────────────────────────────────────────── */}
       <div className={cn('rounded-xl border p-4', allApproved ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200')}>
@@ -2801,6 +3005,35 @@ export function SubOrderPanel({
   const [showProdModal, setShowProdModal] = useState(false)
   const [showFIModal,   setShowFIModal]   = useState(false)
 
+  // Pre-prod unlock state — seeded from order data, managed locally
+  const [preProdUnlocked,    setPPUnlocked]    = useState(order.preProdUnlocked ?? false)
+  const [ppUnlockReason,     setPPReason]      = useState(order.preProdUnlockReason ?? '')
+  const [ppUnlockedBy,       setPPBy]          = useState(order.preProdUnlockedBy ?? '')
+  const [ppUnlockedAt,       setPPAt]          = useState(order.preProdUnlockedAt ?? '')
+  const [showUnlockModal,    setShowUnlockModal] = useState(false)
+
+  // Roles allowed to toggle unlock
+  const UNLOCK_ROLES = ['sourcing-poc', 'sourcing-manager', 'sourcing-director']
+  // For prototype, assume current user is the POC (Parthipan Kumar)
+  const currentUserName = 'Parthipan Kumar'
+  const canToggleUnlock = true // would check UNLOCK_ROLES.includes(currentUser.role) in prod
+
+  function handleUnlockConfirm(reason: string) {
+    const now = new Date().toISOString()
+    setPPUnlocked(true)
+    setPPReason(reason)
+    setPPBy(currentUserName)
+    setPPAt(now)
+    setShowUnlockModal(false)
+  }
+
+  function handleRelock() {
+    setPPUnlocked(false)
+    setPPReason('')
+    setPPBy('')
+    setPPAt('')
+  }
+
   const tabs: { key: TabKey; label: string; count?: number; alert?: boolean }[] = [
     { key: 'overview',      label: 'Overview' },
     ...(['assigned','vendor'].includes(order.currentStage) ? [
@@ -2886,7 +3119,7 @@ export function SubOrderPanel({
 
           {/* Progress strip */}
           <div className="mb-3">
-            <ProgressStrip currentStage={order.currentStage} />
+            <ProgressStrip currentStage={order.currentStage} preProdUnlocked={preProdUnlocked} />
           </div>
 
           {/* Stage context pills */}
@@ -2982,11 +3215,25 @@ export function SubOrderPanel({
               order={order}
               onUpdateProduction={() => setShowProdModal(true)}
               onRequestFI={() => setShowFIModal(true)}
+              unlockBannerProps={
+                order.costStatus !== 'approved' ? {
+                  order,
+                  unlocked: preProdUnlocked,
+                  unlockedBy: ppUnlockedBy,
+                  unlockedAt: ppUnlockedAt,
+                  unlockReason: ppUnlockReason,
+                  canToggle: canToggleUnlock,
+                  onUnlock: () => setShowUnlockModal(true),
+                  onRelock: handleRelock,
+                } : undefined
+              }
             />
           )}
           {activeTab === 'vendor-assign' && <VendorAssignTab order={order} />}
           {activeTab === 'costing' && <CostingTab order={order} />}
-          {activeTab === 'pre-prod' && <PreProdTab order={order} />}
+          {activeTab === 'pre-prod' && (
+            <PreProdTab order={{ ...order, preProdUnlocked, preProdUnlockReason: ppUnlockReason }} />
+          )}
           {activeTab === 'production' && <ProductionTab order={order} onUpdate={() => setShowProdModal(true)} />}
           {activeTab === 'samples' && <SamplesTab order={order} />}
           {activeTab === 'inspection' && <InspectionTab order={order} onRequestFI={() => setShowFIModal(true)} />}
@@ -2994,6 +3241,14 @@ export function SubOrderPanel({
           {activeTab === 'history' && <HistoryTab order={order} />}
         </div>
       </div>
+
+      {/* Pre-prod unlock modal */}
+      {showUnlockModal && (
+        <PreProdUnlockModal
+          onClose={() => setShowUnlockModal(false)}
+          onConfirm={handleUnlockConfirm}
+        />
+      )}
     </div>
   )
 }
