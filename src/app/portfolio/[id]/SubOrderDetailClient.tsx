@@ -349,8 +349,22 @@ function PreProdUnlockModal({
 
 // ─── Pre-Prod Unlock Banner (shown in Overview tab) ───────────────────────────
 
+type SplitChildUnlockState = {
+  childId: string
+  childLabel: string   // "A" / "B"
+  vendor: string
+  vendorLocation: string
+  qty: number
+  costStatus: string
+  unlocked: boolean
+  unlockedBy?: string
+  unlockedAt?: string
+  unlockReason?: string
+}
+
 function PreProdUnlockBanner({
   order,
+  // single-vendor mode
   unlocked,
   unlockedBy,
   unlockedAt,
@@ -358,17 +372,24 @@ function PreProdUnlockBanner({
   canToggle,
   onUnlock,
   onRelock,
+  // split mode
+  splitChildren,
+  onUnlockChild,
+  onRelockChild,
 }: {
   order: SubOrder
-  unlocked: boolean
+  unlocked?: boolean
   unlockedBy?: string
   unlockedAt?: string
   unlockReason?: string
-  canToggle: boolean
-  onUnlock: () => void
-  onRelock: () => void
+  canToggle?: boolean
+  onUnlock?: () => void
+  onRelock?: () => void
+  splitChildren?: SplitChildUnlockState[]
+  onUnlockChild?: (childId: string) => void
+  onRelockChild?: (childId: string) => void
 }) {
-  // Only show when costing is not approved
+  // Don't show if costing already approved
   if (order.costStatus === 'approved') return null
 
   const fmtDate = (iso?: string) => {
@@ -376,6 +397,106 @@ function PreProdUnlockBanner({
     return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
   }
 
+  // ── Case 1: No vendor assigned ──────────────────────────────────────────────
+  if (order.vendor.id === 'v_tba' && !splitChildren) {
+    return (
+      <div className="mb-4 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 flex items-start gap-3">
+        <div className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Lock className="w-4 h-4 text-slate-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-slate-700">Pre-production locked — no vendor yet</p>
+          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+            A vendor must be assigned before pre-production can be started or unlocked.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Case 2: Split parent — per-child unlock ─────────────────────────────────
+  if (splitChildren && splitChildren.length > 0) {
+    const allUnlocked = splitChildren.every(c => c.unlocked)
+    return (
+      <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3.5">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+            <Lock className="w-4 h-4 text-amber-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-amber-900">
+              Split order — pre-production is per vendor
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+              This order is split across {splitChildren.length} vendors. Each vendor's allocation
+              can be unlocked independently before costing is approved.
+            </p>
+          </div>
+        </div>
+
+        {/* Per-child rows */}
+        <div className="space-y-2">
+          {splitChildren.map(child => (
+            <div key={child.childId}
+              className={cn(
+                'flex items-center gap-3 rounded-lg border px-3 py-2.5 bg-white',
+                child.unlocked ? 'border-amber-300' : 'border-slate-200'
+              )}
+            >
+              {/* Vendor info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-slate-800">{child.vendor}</span>
+                  <span className="text-[10px] text-slate-500">{child.vendorLocation}</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
+                    {child.qty} pcs
+                  </span>
+                  {child.unlocked && (
+                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5">
+                      <Zap className="w-2.5 h-2.5" /> Unlocked
+                      {child.unlockedBy ? ` · ${child.unlockedBy}` : ''}
+                      {child.unlockedAt ? ` · ${fmtDate(child.unlockedAt)}` : ''}
+                    </span>
+                  )}
+                </div>
+                {child.unlocked && child.unlockReason && (
+                  <p className="text-[10px] text-amber-700 italic mt-0.5">"{child.unlockReason}"</p>
+                )}
+              </div>
+
+              {/* Toggle */}
+              {canToggle && (
+                child.unlocked
+                  ? (
+                    <button
+                      onClick={() => onRelockChild?.(child.childId)}
+                      className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap"
+                    >
+                      <Lock className="w-3 h-3" /> Re-lock
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onUnlockChild?.(child.childId)}
+                      className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors whitespace-nowrap"
+                    >
+                      <LockOpen className="w-3 h-3" /> Unlock
+                    </button>
+                  )
+              )}
+            </div>
+          ))}
+        </div>
+
+        {allUnlocked && (
+          <p className="text-xs text-amber-600 mt-2.5 pl-1">
+            No PO can be raised for any allocation until costing is approved.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // ── Case 3: Single vendor — standard lock/unlock ────────────────────────────
   if (!unlocked) {
     return (
       <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3.5 flex items-start gap-3">
@@ -402,7 +523,7 @@ function PreProdUnlockBanner({
     )
   }
 
-  // Unlocked state
+  // ── Case 4: Single vendor — unlocked ───────────────────────────────────────
   return (
     <div className="mb-4 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3.5">
       <div className="flex items-start gap-3">
@@ -3010,20 +3131,47 @@ export function SubOrderPanel({
   const [ppUnlockReason,     setPPReason]      = useState(order.preProdUnlockReason ?? '')
   const [ppUnlockedBy,       setPPBy]          = useState(order.preProdUnlockedBy ?? '')
   const [ppUnlockedAt,       setPPAt]          = useState(order.preProdUnlockedAt ?? '')
-  const [showUnlockModal,    setShowUnlockModal] = useState(false)
+  const [showUnlockModal,    setShowUnlockModal]   = useState(false)
+  // For split-parent mode: tracks which child to unlock
+  const [unlockingChildId,   setUnlockingChildId]  = useState<string | null>(null)
 
-  // Roles allowed to toggle unlock
-  const UNLOCK_ROLES = ['sourcing-poc', 'sourcing-manager', 'sourcing-director']
   // For prototype, assume current user is the POC (Parthipan Kumar)
   const currentUserName = 'Parthipan Kumar'
-  const canToggleUnlock = true // would check UNLOCK_ROLES.includes(currentUser.role) in prod
+  const canToggleUnlock = true // would check role in prod
+
+  // Detect split children — other sub-orders pointing to this order
+  const splitChildren = allSubOrders.filter(o => o.parentSubOrderId === order.id)
+  const isSplitParent = splitChildren.length > 0
+  const vendorAssigned = order.vendor.id !== 'v_tba'
+
+  // Per-child unlock state (keyed by child id)
+  const [childUnlockMap, setChildUnlockMap] = useState<Record<string, {
+    unlocked: boolean; reason: string; by: string; at: string
+  }>>(() =>
+    Object.fromEntries(splitChildren.map(c => [c.id, {
+      unlocked: c.preProdUnlocked ?? false,
+      reason: c.preProdUnlockReason ?? '',
+      by: c.preProdUnlockedBy ?? '',
+      at: c.preProdUnlockedAt ?? '',
+    }]))
+  )
 
   function handleUnlockConfirm(reason: string) {
     const now = new Date().toISOString()
-    setPPUnlocked(true)
-    setPPReason(reason)
-    setPPBy(currentUserName)
-    setPPAt(now)
+    if (unlockingChildId) {
+      // Split child unlock
+      setChildUnlockMap(prev => ({
+        ...prev,
+        [unlockingChildId]: { unlocked: true, reason, by: currentUserName, at: now },
+      }))
+      setUnlockingChildId(null)
+    } else {
+      // Single-vendor order unlock
+      setPPUnlocked(true)
+      setPPReason(reason)
+      setPPBy(currentUserName)
+      setPPAt(now)
+    }
     setShowUnlockModal(false)
   }
 
@@ -3032,6 +3180,13 @@ export function SubOrderPanel({
     setPPReason('')
     setPPBy('')
     setPPAt('')
+  }
+
+  function handleRelockChild(childId: string) {
+    setChildUnlockMap(prev => ({
+      ...prev,
+      [childId]: { unlocked: false, reason: '', by: '', at: '' },
+    }))
   }
 
   const tabs: { key: TabKey; label: string; count?: number; alert?: boolean }[] = [
@@ -3119,7 +3274,14 @@ export function SubOrderPanel({
 
           {/* Progress strip */}
           <div className="mb-3">
-            <ProgressStrip currentStage={order.currentStage} preProdUnlocked={preProdUnlocked} />
+            <ProgressStrip
+              currentStage={order.currentStage}
+              preProdUnlocked={
+                isSplitParent
+                  ? Object.values(childUnlockMap).some(c => c.unlocked)
+                  : preProdUnlocked
+              }
+            />
           </div>
 
           {/* Stage context pills */}
@@ -3218,13 +3380,35 @@ export function SubOrderPanel({
               unlockBannerProps={
                 order.costStatus !== 'approved' ? {
                   order,
-                  unlocked: preProdUnlocked,
-                  unlockedBy: ppUnlockedBy,
-                  unlockedAt: ppUnlockedAt,
-                  unlockReason: ppUnlockReason,
                   canToggle: canToggleUnlock,
-                  onUnlock: () => setShowUnlockModal(true),
-                  onRelock: handleRelock,
+                  // Split parent: per-child unlock list
+                  ...(isSplitParent ? {
+                    splitChildren: splitChildren.map((c, i) => ({
+                      childId: c.id,
+                      childLabel: String.fromCharCode(65 + i),
+                      vendor: c.vendor.name,
+                      vendorLocation: c.vendor.location,
+                      qty: c.orderQty,
+                      costStatus: c.costStatus,
+                      unlocked: childUnlockMap[c.id]?.unlocked ?? false,
+                      unlockedBy: childUnlockMap[c.id]?.by,
+                      unlockedAt: childUnlockMap[c.id]?.at,
+                      unlockReason: childUnlockMap[c.id]?.reason,
+                    })),
+                    onUnlockChild: (childId) => {
+                      setUnlockingChildId(childId)
+                      setShowUnlockModal(true)
+                    },
+                    onRelockChild: handleRelockChild,
+                  } : {
+                    // Single vendor: order-level unlock
+                    unlocked: preProdUnlocked,
+                    unlockedBy: ppUnlockedBy,
+                    unlockedAt: ppUnlockedAt,
+                    unlockReason: ppUnlockReason,
+                    onUnlock: () => setShowUnlockModal(true),
+                    onRelock: handleRelock,
+                  }),
                 } : undefined
               }
             />
