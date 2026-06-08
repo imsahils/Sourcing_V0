@@ -75,7 +75,7 @@ export interface SubOrder {
   // Costing
   targetPrice: number
   closedCost?: number
-  costStatus: 'pending' | 'submitted' | 'approved' | 'escalated'
+  costStatus: 'pending' | 'submitted' | 'approved' | 'escalated' | 'rejected'
 
   // Quantities
   orderQty: number

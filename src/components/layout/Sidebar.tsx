@@ -9,8 +9,9 @@ import {
   Layers, Users, ClipboardCheck, CheckSquare, Warehouse,
   Star, UserCog, ClipboardList, Plus, GitMerge,
   ChevronDown, Search, IndianRupee, LogOut,
-  FlaskConical, Package, Factory, ScanLine, Truck,
+  FlaskConical, Package, Factory, ScanLine, Truck, Bell,
 } from 'lucide-react'
+import { useVendorNotifications } from '@/lib/vendor-notifications'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type SubItem = { label: string; tab: string }
@@ -56,9 +57,10 @@ const navItems: NavItem[] = [
   { label: 'Reports / DPR',   href: '/reports',          icon: BarChart2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr', 'category-head', 'buying-poc'] },
   { label: 'Daily Production',href: '/reports?view=dpr', icon: Factory,       section: 'poc', visibleTo: ['vendor'] },
   { label: 'Order Costing',   href: '/reports?view=costing', icon: IndianRupee, section: 'poc', visibleTo: ['vendor'] },
-  { label: 'RFQ',             href: '/vendor-portal?view=rfq',       icon: Inbox,         section: 'poc', visibleTo: ['vendor'] },
-  { label: 'Pre-Production',  href: '/vendor-portal?view=pre-prod',  icon: FlaskConical,  section: 'poc', visibleTo: ['vendor'] },
-  { label: 'My Orders',       href: '/vendor-portal?view=my-orders', icon: Package,       section: 'poc', visibleTo: ['vendor'] },
+  { label: 'RFQ',             href: '/vendor-portal?view=rfq',             icon: Inbox,       section: 'poc', visibleTo: ['vendor'] },
+  { label: 'Pre-Production',  href: '/vendor-portal?view=pre-prod',        icon: FlaskConical,section: 'poc', visibleTo: ['vendor'] },
+  { label: 'My Orders',       href: '/vendor-portal?view=my-orders',       icon: Package,     section: 'poc', visibleTo: ['vendor'] },
+  { label: 'Notifications',   href: '/vendor-portal?view=notifications',   icon: Bell,        section: 'poc', visibleTo: ['vendor'] },
   { label: 'Manager Queue',   href: '/manager',          icon: Users,         section: 'mgr', visibleTo: ['sourcing-mgr'] },
   { label: 'Category Head',   href: '/category-head',    icon: Star,          section: 'mgr', visibleTo: ['sourcing-mgr', 'category-head'] },
   { label: 'Inspections',     href: '/inspections',      icon: Search,        section: 'qa',  visibleTo: ['qa-inspector', 'qa-mgr'] },
@@ -270,8 +272,12 @@ export function Sidebar() {
   const currentTab   = searchParams.get('tab') ?? ''
   const { currentUser } = useCurrentUser()
   const { open: mobileOpen, close: closeMobile } = useSidebar()
+  const { unreadCount } = useVendorNotifications()
 
   const role = currentUser.role
+  const vendorNotifBadge = role === 'vendor' && currentUser.vendorId
+    ? unreadCount(currentUser.vendorId)
+    : 0
 
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
     const initial = navItems
@@ -392,9 +398,14 @@ export function Sidebar() {
                   <Icon size={14} color="currentColor" strokeWidth={1.8} />
                   <span style={{ flex: 1, fontSize: 13 }}>{item.label}</span>
 
-                  {item.badge != null && item.badge > 0 && (
-                    <span style={S.badge(active)}>{item.badge}</span>
-                  )}
+                  {(() => {
+                    const badgeCount = item.label === 'Notifications'
+                      ? vendorNotifBadge
+                      : (item.badge ?? 0)
+                    return badgeCount > 0 ? (
+                      <span style={S.badge(active)}>{badgeCount}</span>
+                    ) : null
+                  })()}
 
                   {item.subItems && (
                     <span

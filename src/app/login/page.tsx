@@ -26,16 +26,17 @@ const C = {
 const DEMO_USERS: {
   id: string; name: string; email: string; password: string
   role: UserRole; initials: string; department: string; redirect: string
-  avatarColor: string
+  avatarColor: string; vendorId?: string
 }[] = [
   { id: 'u1', name: 'Parthipan Kumar', email: 'poc@demo.com',       password: 'demo', role: 'sourcing-poc',  initials: 'PK', department: 'Sourcing',  avatarColor: '#CC785C', redirect: '/portfolio?tab=dashboard' },
   { id: 'u2', name: 'Priya Menon',     email: 'manager@demo.com',   password: 'demo', role: 'sourcing-mgr',  initials: 'PM', department: 'Sourcing',  avatarColor: '#B5633E', redirect: '/portfolio?tab=dashboard' },
   { id: 'u3', name: 'Megha Sharma',    email: 'category@demo.com',  password: 'demo', role: 'category-head', initials: 'MS', department: 'Buying',    avatarColor: '#92400E', redirect: '/category-head' },
   { id: 'u4', name: 'Rahul Desai',     email: 'buyer@demo.com',     password: 'demo', role: 'buying-poc',    initials: 'RD', department: 'Buying',    avatarColor: '#1D4ED8', redirect: '/order-management?tab=grid' },
   { id: 'u5', name: 'Ankit Verma',     email: 'qa@demo.com',        password: 'demo', role: 'qa-mgr',        initials: 'AV', department: 'QA',        avatarColor: '#2E7D52', redirect: '/qa' },
-  { id: 'u6', name: 'Sunit Jain',      email: 'warehouse@demo.com', password: 'demo', role: 'warehouse-ops', initials: 'SJ', department: 'Warehouse', avatarColor: '#6B7280', redirect: '/warehouse' },
-  { id: 'u7', name: 'Bharti Apparels', email: 'vendor@demo.com',    password: 'demo', role: 'vendor',        initials: 'BA', department: 'Vendor',    avatarColor: '#78716C', redirect: '/vendor-portal' },
-  { id: 'u8', name: 'Riya Kapoor',     email: 'mis@demo.com',       password: 'demo', role: 'sourcing-mis',  initials: 'RK', department: 'Sourcing',  avatarColor: '#A8A29E', redirect: '/purchase-orders' },
+  { id: 'u6', name: 'Arul Pandey',     email: 'inspector@demo.com', password: 'demo', role: 'qa-inspector',  initials: 'AP', department: 'QA',        avatarColor: '#0F766E', redirect: '/inspector' },
+  { id: 'u7', name: 'Sunit Jain',      email: 'warehouse@demo.com', password: 'demo', role: 'warehouse-ops', initials: 'SJ', department: 'Warehouse', avatarColor: '#6B7280', redirect: '/warehouse' },
+  { id: 'u8', name: 'Bharti Apparels', email: 'vendor@demo.com',    password: 'demo', role: 'vendor',        initials: 'BA', department: 'Vendor',    avatarColor: '#78716C', redirect: '/vendor-portal', vendorId: 'v1' },
+  { id: 'u9', name: 'Riya Kapoor',     email: 'mis@demo.com',       password: 'demo', role: 'sourcing-mis',  initials: 'RK', department: 'Sourcing',  avatarColor: '#A8A29E', redirect: '/purchase-orders' },
 ]
 
 const ROLE_LABEL: Record<UserRole, string> = {
@@ -56,7 +57,8 @@ const ROLE_LABEL: Record<UserRole, string> = {
 function demoLogin(user: typeof DEMO_USERS[0]) {
   const payload = {
     id: user.id, name: user.name, email: user.email,
-    role: user.role, department: user.department, initials: user.initials, vendorId: null,
+    role: user.role, department: user.department, initials: user.initials,
+    vendorId: user.vendorId ?? null,
   }
   localStorage.setItem('fabricate-token', 'demo-token-' + user.id)
   localStorage.setItem('fabricate-user', JSON.stringify(payload))
@@ -89,8 +91,8 @@ export default function LoginPage() {
       const role = res.user.role as UserRole
       const redirectMap: Partial<Record<UserRole, string>> = {
         'vendor':         '/vendor-portal',
-        'qa-inspector':   '/inspections',
-        'qa-mgr':         '/inspections',
+        'qa-inspector':   '/inspector',
+        'qa-mgr':         '/qa',
         'warehouse-ops':  '/warehouse',
         'sourcing-mis':   '/purchase-orders',
         'designer':       '/sampling',

@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   AlertTriangle, ArrowLeft, Calendar, Package, TrendingUp,
@@ -17,6 +17,7 @@ import { useSubOrder } from '@/lib/hooks/useSubOrders'
 import { cn } from '@/lib/utils'
 import type { SubOrder, PreProdStage, FIRequest, ActivityLog, SampleRecord, SampleType, SampleStatus, VendorRFQ, VendorRFQStatus } from '@/lib/types'
 import { vendors, subOrders as allSubOrders } from '@/lib/data'
+import { useVendorNotifications } from '@/lib/vendor-notifications'
 
 // ─── Production Update Modal ─────────────────────────────────────────────────
 
@@ -395,6 +396,24 @@ function PreProdUnlockBanner({
   const fmtDate = (iso?: string) => {
     if (!iso) return ''
     return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+
+  // ── Case 0: Costing rejected — auto-locked banner ──────────────────────────
+  if (order.costStatus === 'rejected') {
+    return (
+      <div className="mb-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3.5 flex items-start gap-3">
+        <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Lock className="w-4 h-4 text-red-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-red-900">Pre-production automatically re-locked</p>
+          <p className="text-xs text-red-700 mt-0.5 leading-relaxed">
+            Costing was rejected — all pre-prod activities must pause until a new costing cycle is approved.
+            {' '}Vendor has been notified.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   // ── Case 1: No vendor assigned ──────────────────────────────────────────────
@@ -3156,6 +3175,54 @@ export function SubOrderPanel({
     }]))
   )
 
+  // Vendor notifications
+  const { push: pushNotif } = useVendorNotifications()
+
+  // ── Auto re-lock when costing is rejected ──────────────────────────────────
+  useEffect(() => {
+    if (order.costStatus !== 'rejected') return
+    // Clear single-vendor unlock
+    if (preProdUnlocked) {
+      setPPUnlocked(false)
+      setPPReason('')
+      setPPBy('')
+      setPPAt('')
+      // Notify vendor
+      if (!isSplitParent && order.vendor.id !== 'v_tba') {
+        pushNotif({
+          type: 'preprod-relocked',
+          vendorId: order.vendor.id,
+          orderId: order.id,
+          styleCode: order.styleCode,
+          styleName: order.styleName,
+          colour: order.colour,
+          unlockedBy: currentUserName,
+        })
+      }
+    }
+    // Clear all child unlocks
+    setChildUnlockMap(prev => {
+      const hadAnyUnlocked = Object.values(prev).some(c => c.unlocked)
+      if (!hadAnyUnlocked) return prev
+      // Notify each vendor whose unlock is being cleared
+      splitChildren.forEach(child => {
+        if (prev[child.id]?.unlocked) {
+          pushNotif({
+            type: 'preprod-relocked',
+            vendorId: child.vendor.id,
+            orderId: child.id,
+            styleCode: child.styleCode,
+            styleName: child.styleName,
+            colour: child.colour,
+            unlockedBy: currentUserName,
+          })
+        }
+      })
+      return Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, { ...v, unlocked: false }]))
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.costStatus])
+
   function handleUnlockConfirm(reason: string) {
     const now = new Date().toISOString()
     if (unlockingChildId) {
@@ -3164,6 +3231,20 @@ export function SubOrderPanel({
         ...prev,
         [unlockingChildId]: { unlocked: true, reason, by: currentUserName, at: now },
       }))
+      // Push vendor notification for this child
+      const child = splitChildren.find(c => c.id === unlockingChildId)
+      if (child) {
+        pushNotif({
+          type: 'preprod-unlocked',
+          vendorId: child.vendor.id,
+          orderId: child.id,
+          styleCode: child.styleCode,
+          styleName: child.styleName,
+          colour: child.colour,
+          reason,
+          unlockedBy: currentUserName,
+        })
+      }
       setUnlockingChildId(null)
     } else {
       // Single-vendor order unlock
@@ -3171,6 +3252,19 @@ export function SubOrderPanel({
       setPPReason(reason)
       setPPBy(currentUserName)
       setPPAt(now)
+      // Push vendor notification
+      if (order.vendor.id !== 'v_tba') {
+        pushNotif({
+          type: 'preprod-unlocked',
+          vendorId: order.vendor.id,
+          orderId: order.id,
+          styleCode: order.styleCode,
+          styleName: order.styleName,
+          colour: order.colour,
+          reason,
+          unlockedBy: currentUserName,
+        })
+      }
     }
     setShowUnlockModal(false)
   }

@@ -7,6 +7,7 @@ import {
   TrendingUp, TrendingDown, Minus, Send, Package, Star,
   ChevronRight, AlertTriangle, RotateCcw, FileText, Menu,
   FlaskConical, Truck, ChevronDown, ChevronUp, CheckCheck,
+  Bell, Zap, Lock,
 } from 'lucide-react'
 import type { SubOrder, SampleRecord, SampleType, VendorRFQ, VendorRFQStatus } from '@/lib/types'
 import { Header } from '@/components/layout/Header'
@@ -24,6 +25,7 @@ import {
   resolveVendorKey,
 } from '@/lib/vendor-costing'
 import { useCostingStore } from '@/lib/costing-store'
+import { useVendorNotifications, type VendorNotification } from '@/lib/vendor-notifications'
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -808,6 +810,122 @@ function RFQResponseModal({
   )
 }
 
+// ─── Notifications Inbox (vendor-facing) ──────────────────────────────────────
+
+function NotificationsInbox({ vendorId }: { vendorId: string }) {
+  const { notifications, markRead, markAllRead } = useVendorNotifications()
+  const myNotifs = notifications.filter(n => n.vendorId === vendorId)
+  const unread = myNotifs.filter(n => !n.read).length
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-base font-bold text-slate-900">Notifications</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {unread > 0 ? `${unread} unread` : 'All caught up'}
+          </p>
+        </div>
+        {unread > 0 && (
+          <button
+            onClick={() => markAllRead(vendorId)}
+            className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-800 font-medium transition-colors"
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            Mark all read
+          </button>
+        )}
+      </div>
+
+      {myNotifs.length === 0 ? (
+        <div className="text-center py-16">
+          <Bell className="w-8 h-8 text-slate-300 mx-auto mb-3" />
+          <p className="text-sm text-slate-400">No notifications yet</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {myNotifs.map(n => (
+            <div
+              key={n.id}
+              onClick={() => markRead(n.id)}
+              className={cn(
+                'rounded-xl border p-4 cursor-pointer transition-all hover:shadow-sm',
+                n.read
+                  ? 'bg-white border-slate-200'
+                  : n.type === 'preprod-unlocked'
+                    ? 'bg-amber-50 border-amber-200'
+                    : 'bg-red-50 border-red-200'
+              )}
+            >
+              <div className="flex items-start gap-3">
+                {/* Icon */}
+                <div className={cn(
+                  'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
+                  n.read ? 'bg-slate-100' : n.type === 'preprod-unlocked' ? 'bg-amber-100' : 'bg-red-100'
+                )}>
+                  {n.type === 'preprod-unlocked'
+                    ? <Zap className={cn('w-4 h-4', n.read ? 'text-slate-400' : 'text-amber-600')} />
+                    : <Lock className={cn('w-4 h-4', n.read ? 'text-slate-400' : 'text-red-600')} />
+                  }
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-700">{n.orderId}</span>
+                    <span className="text-xs text-slate-500">{n.styleCode} · {n.colour}</span>
+                    {!n.read && (
+                      <span className={cn(
+                        'text-[10px] px-1.5 py-0.5 rounded-full font-semibold',
+                        n.type === 'preprod-unlocked' ? 'bg-amber-200 text-amber-800' : 'bg-red-200 text-red-800'
+                      )}>New</span>
+                    )}
+                  </div>
+
+                  <p className={cn(
+                    'text-sm font-semibold mt-1',
+                    n.read ? 'text-slate-600' : n.type === 'preprod-unlocked' ? 'text-amber-900' : 'text-red-900'
+                  )}>
+                    {n.type === 'preprod-unlocked'
+                      ? 'Pre-production unlocked — you can proceed'
+                      : 'Pre-production paused — costing rejected'}
+                  </p>
+
+                  {n.type === 'preprod-unlocked' && (
+                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                      You can begin lab dip, fabric approval, and sampling activities.
+                      {' '}<span className="font-medium text-amber-700">Note: Costing is not yet finalised. No PO until approved. Proceed at own risk.</span>
+                    </p>
+                  )}
+                  {n.type === 'preprod-relocked' && (
+                    <p className="text-xs text-red-700 mt-1 leading-relaxed">
+                      Costing for this order was rejected. Please pause all pre-production activities until a new costing cycle is confirmed.
+                    </p>
+                  )}
+
+                  {n.reason && n.type === 'preprod-unlocked' && (
+                    <p className="text-xs text-amber-700 italic mt-1.5">"{n.reason}"</p>
+                  )}
+
+                  <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
+                    <span>{n.unlockedBy ?? 'Sourcing Team'}</span>
+                    <span>·</span>
+                    <span>{fmtDate(n.createdAt)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── RFQ Inbox (vendor-facing) ────────────────────────────────────────────────
 
 function RFQInbox({ vendorId, companyName }: { vendorId: string; companyName: string }) {
@@ -1083,8 +1201,10 @@ function VendorView() {
   const preProdOrders = myOrders.filter(s => s.currentStage === 'pre-prod')
 
   const searchParams = useSearchParams()
-  const viewParam    = (searchParams.get('view') as 'rfq' | 'pre-prod' | 'my-orders' | null)
-  const vendorTab: 'rfq' | 'pre-prod' | 'my-orders' = viewParam ?? 'rfq'
+  const viewParam    = (searchParams.get('view') as 'rfq' | 'pre-prod' | 'my-orders' | 'notifications' | null)
+  const vendorTab: 'rfq' | 'pre-prod' | 'my-orders' | 'notifications' = viewParam ?? 'rfq'
+  const { unreadCount } = useVendorNotifications()
+  const notifUnread = unreadCount(vendorId)
   const [prodModal,       setProdModal]       = useState<string | null>(null)
   const [dispatchModal,   setDispatchModal]   = useState<string | null>(null)
   const [expandedPreProd, setExpandedPreProd] = useState<Set<string>>(new Set(preProdOrders.map(o => o.id)))
@@ -1163,6 +1283,7 @@ function VendorView() {
       <div className="pt-16 px-4 md:px-6 pb-10">
         {vendorTab === 'rfq' && <RFQInbox vendorId={vendorId} companyName={companyName} />}
         {vendorTab === 'my-orders' && <MyConfirmedOrders vendorId={vendorId} companyName={companyName} />}
+        {vendorTab === 'notifications' && <NotificationsInbox vendorId={vendorId} />}
 
         {vendorTab === 'pre-prod' && <>
         {/* ── Pre-prod summary strip ── */}

@@ -192,8 +192,81 @@ accessible = order.currentStage === 'pre-prod'
 
 ---
 
-## 11. Out of Scope (Phase 2)
+## 11. Vendor Notification on Unlock
 
-- Push notification to vendor when pre-prod is unlocked
+When a pre-prod unlock is confirmed (single-vendor or per-child), a **notification is pushed to the vendor** for that allocation.
+
+### Notification content
+```
+[Order ID] · [Style] · [Colour]
+Pre-production unlocked — you can begin activities now
+
+"[Reason given by POC]"
+
+Note: Costing is not yet finalised. No PO will be raised until
+costing is approved. Proceed at your own risk.
+
+— [POC Name] · [Date]
+```
+
+### Where it appears
+- **Vendor Portal** → a `Notifications` tab (new) alongside Orders / RFQ / Pre-Prod
+- A **red badge** on the Notifications tab for unread count
+- Each notification card shows: order reference, style name, unlock reason, timestamp, and a CTA → "View Pre-Production Stages"
+
+### Trigger
+The notification is created at the moment `handleUnlockConfirm` executes:
+- Single vendor: notification for `order.vendor`
+- Split child: notification for the specific child's vendor
+
+### State
+Notifications are held in a shared `VendorNotificationStore` context (localStorage-backed in the prototype). Key: `vendorId`. Each entry: `{ id, vendorId, orderId, styleCode, colour, reason, unlockedBy, unlockedAt, read }`.
+
+---
+
+## 12. Auto Re-lock on Costing Rejection
+
+When `costStatus` transitions to `'rejected'`:
+
+### What happens
+1. Any active pre-prod unlock on that order is **automatically cleared**:
+   - Single-vendor: `preProdUnlocked → false`
+   - Split parent: all children with `unlocked: true` are re-locked
+2. The Overview tab banner changes to a **red auto-lock banner**:
+   ```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ 🔒  Pre-production automatically re-locked                      │
+   │     Costing was rejected — pre-prod activities must pause.      │
+   │     Vendor has been notified.                                   │
+   └─────────────────────────────────────────────────────────────────┘
+   ```
+3. A **vendor notification** is pushed: "Pre-production has been paused — costing was rejected for [Order]. Please pause all activities until further notice."
+4. An **activity log** entry is added: `"Pre-production auto-locked — costing rejected"`
+
+### Trigger point
+In `handleReject` (costing module, `portfolio/page.tsx`), after setting `costStatus: 'rejected'`, also set `preProdUnlocked: false` and clear `preProdUnlockReason / preProdUnlockedBy / preProdUnlockedAt`.
+
+In `SubOrderPanel` (`SubOrderDetailClient.tsx`), a `useEffect` watching `order.costStatus` detects the transition and syncs local unlock state:
+```typescript
+useEffect(() => {
+  if (order.costStatus === 'rejected') {
+    setPPUnlocked(false)
+    // Clear all child unlocks too
+    setChildUnlockMap(prev =>
+      Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, { ...v, unlocked: false }]))
+    )
+  }
+}, [order.costStatus])
+```
+
+### Banner variant: auto-locked
+Different from the normal "locked" banner — red border, explicit reason:
+- Shows for orders where `costStatus === 'rejected'` (regardless of current unlock state)
+- Can be dismissed but pre-prod remains inaccessible until a new costing cycle is started
+
+---
+
+## 13. Out of Scope
+
 - Manager approval required before unlock takes effect (two-step)
-- Automatic re-lock if costing is rejected (no side-effect triggering in Phase 1)
+- Automatic WhatsApp / email push to vendor (Phase 3 — external integrations)
