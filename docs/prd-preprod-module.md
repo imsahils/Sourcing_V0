@@ -1,10 +1,12 @@
 # Pre-Production Module — Product Requirements Document
 
 > **Module:** Pre-Production  
-> **Date:** 2026-06-08  
-> **Status:** Active  
+> **Date:** 2026-06-08 (built & deployed 2026-06-09)  
+> **Status:** Built — live at https://ubiquitous-cat-1c6553.netlify.app  
 > **Author:** Sahil Sharma  
 > **Related docs:** `prd-costing-po.md`, `prd-preprod-unlock.md`, `prd-vendor-assignment.md`
+
+> **Build note (2026-06-09):** During build, two capabilities were added to the `/pre-prod` reviewer queue beyond the original spec — (1) reviewers can **start** a not-started stage (not just review), gated on pre-prod being unlocked; (2) the queue gained **action + stage-type filters** and **reviewer photo upload**. The sidebar gained **role-specific stage sub-items**. These are reflected in §3, §9.2, §10.8, §12 below.
 
 ---
 
@@ -38,13 +40,15 @@ Key pain points:
 | Role | Can do |
 |------|--------|
 | **Sourcing POC** | Set planned dates · Mark stage as submitted · Upload photos · Record approval/rejection on behalf of reviewer · Unlock production gate with reason · Confirm REPLEN skip |
-| **Designer** | Review Lab Dip, Strike Off, PP Sample — approve or reject with notes + tags · View personal approval timeline |
-| **Fit Technician** | Review Fit Sample, PP Fit — approve or reject with notes + tags · View personal approval timeline |
+| **Designer** | Review Lab Dip, Strike Off, PP Sample — approve or reject with notes + tags · **Start** a not-started stage (upload photo to log a sample on receipt) when pre-prod is unlocked · Upload own photo of the sample during review · View personal approval timeline |
+| **Fit Technician** | Review Fit Sample, PP Fit, PP Sample — approve or reject with notes + tags · **Start** a not-started stage when pre-prod is unlocked · Upload own photo during review · View personal approval timeline |
 | **Sourcing Manager** | All POC actions (on behalf of their team) · Portfolio health view across all POCs |
 | **Sourcing Director** | Read-only portfolio view |
 | **Vendor** | Receive in-app notifications on stage approval/rejection · View stage status (read-only) in vendor portal |
 
-> **Phase 1 constraint:** Designers and fit technicians record approvals through the system directly via `/pre-prod` route. Vendor-initiated submissions are deferred to the Sampling module.
+> **Phase 1 constraint:** Designers and fit technicians act through the `/pre-prod` route — they can both **review** POC-submitted samples and **start** (initiate) a stage themselves by uploading a photo, but only when the order's pre-prod is unlocked. **Vendor**-initiated submissions remain deferred to the Sampling module.
+>
+> **Note on stage ownership:** the queue surfaces stages by a role→stage-key map, not the single `reviewerRole` field — Designer = `lab-dip` / `strike-off` / `pp-sample`; Fit Technician = `fit-sample` / `pp-fit` / `pp-sample`. PP Sample therefore appears for **both** roles (consistent with its AND-approval model, §8.2a).
 
 ---
 
@@ -315,29 +319,38 @@ Expanded card — two panels:
 
 This is the dedicated home for Designers and Fit Technicians. Also accessible by POC and Manager for monitoring.
 
-**Sidebar entry:** Added for roles `designer` and `fit-technician` — "Pre-Production" with unread badge (count of pending approvals for this user).
+**Sidebar entry:** Added for roles `designer` and `fit-technician` — "Pre-Production" with stage sub-items (§12). The in-page **My Queue** toggle carries the count badge (review + start); a live count on the sidebar nav item itself is not yet wired (see §11.3).
 
 **Two views within `/pre-prod`:**
 
 #### 9.2a My Queue (`?view=queue`)
 
-Default view. Shows all stages currently `pending` where `stage.reviewerRole === currentUser.role`.
+Default view. Surfaces two kinds of work for the reviewer's stages (per the role→stage-key map above):
+
+- **Review cards** — stages whose current iteration is `pending`. Amber flask icon, "Review →".
+- **Start cards** — not-started stages the reviewer can initiate. Blue `+` icon, "Ready to start" + "Pre-prod unlocked" chips, "Start →". Only shown when the order's pre-prod is unlocked (`costStatus === 'approved' || preProdUnlocked`) and the stage is the earliest ready one for that order (prior stage approved). See §10.8.
 
 Layout:
-- Header: "N approvals waiting for you"
-- Filter pills: All · Lab Dip · Fit Sample · PP Sample · PP Fit · Strike Off (only stages relevant to this role)
-- Cards (one per pending stage):
+- Header: "Your pre-production queue" + subline "Designer · N to review · N to start"
+- **Action filter pills**: All · To Review · To Start (each with a live count)
+- **Stage-type filter pills**: All stages + one per role-relevant stage that has items (with counts). Driven by `?tab=<stageKey>` when entered from the sidebar sub-items (§12).
+- Both filter rows scroll horizontally on mobile; the page is fully responsive (sidebar collapses to a hamburger, content goes full-width).
 
+Review card:
 ```
-[Style thumbnail if available]
-NN401-238 · CORAL PINK                       [Overdue chip]
-Lab Dip — Round 2                            Planned: 15-Jun
-Vendor: BS Fashion · POC: Parthipan Kumar
-Submitted: 3 days ago · 2 photos
-[View & Decide →]
+🧪  NN413-185 · BLUE WHITE   [Lab Dip] [Round 2] [⚠ Overdue]       Review →
+    Girls Woven Co-ord Set · Vendor: ARIHANT FASHIONS · POC: Parthipan Kumar
+    Planned: 2 Apr 2026 · Submitted: 8 Apr 2026 · 🖼 1 photo
 ```
 
-Clicking "View & Decide" opens a **right drawer** (§9.2c) — does not navigate away from the queue, so the reviewer can work through multiple items without losing context.
+Start card:
+```
++  NN411-715 · PINK   [Strike Off] [Ready to start]                Start →
+   Girls Party Dress · Vendor: BS FASHION · POC: Parthipan Kumar
+   Planned: 18 Apr 2026 · ✓ Pre-prod unlocked
+```
+
+Clicking a **review** card opens the right drawer (§9.2c); clicking a **start** card opens the Start-Stage modal (§9.2d). Neither navigates away from the queue.
 
 #### 9.2b My History (`?view=history`)
 
@@ -362,17 +375,33 @@ This timeline is the personal record that replaces their WhatsApp scroll. Filter
 
 #### 9.2c Stage Review Drawer
 
-Right-side drawer (780px wide) that opens when reviewer clicks "View & Decide" from the queue.
+Right-side drawer (720px wide; full-screen on mobile) that opens when the reviewer clicks "Review →" on a queue card.
 
 Content:
-- Sub-order summary strip: style code, colour, category, vendor, POC
-- Stage name + round number
-- Photo viewer: full-width carousel, click to zoom
-- Submission details: submitted by, date, notes
-- Past iterations section (collapsible) — full history for context
-- Action bar at bottom: [Approve] [Reject] — opens the respective modal (§9.1b)
+- Sub-order summary strip: style, category, POC, planned, submitted
+- Stage name + round number (orange "Round N" pill when iterating)
+- Photo viewer: full-width image + thumbnail strip; the reviewer's own uploads are appended to the submission's photos
+- **"Add your photo of the sample"** — functional upload zone (reads files to data URLs, up to 3) so the reviewer can attach their own photo of the physical sample
+- Submission note (if any)
+- Past iterations section — full rejection history (tags + notes) for context
+- Action bar (sticky bottom): [Close] [Reject] [Approve]
+  - **Approve** → inline form: optional notes → "Confirm Approval" (carries any added photos)
+  - **Reject** → inline form: stage-specific tags (multi-select) + mandatory notes (≥10 chars) → "Confirm Rejection"
 
-After acting: drawer slides out, queue card disappears (or shows "Approved" state briefly), count badge decrements.
+After acting: drawer slides out, queue card disappears, a flash toast confirms ("Approved — recorded in your history." / "Rejected — vendor & POC notified.").
+
+#### 9.2d Start-Stage Modal
+
+Opens when the reviewer clicks "Start →" on a start card. Lets them log a sample on receipt and kick off the approval record.
+
+Content:
+- Title "Start [stage name]" + sub-order context line
+- Info callout explaining the sample will be logged and then move to review
+- **Sample photo** upload zone (required — min 1 photo; functional file picker)
+- Notes (optional)
+- "Start & Submit" (disabled until ≥1 photo)
+
+On submit: a new `pending` iteration is created for that stage; a flash toast confirms ("Stage started — submitted for review."), and the card leaves the Start list.
 
 ---
 
@@ -465,12 +494,23 @@ Already has a pre-prod view stub. This should show:
 ### 10.7 Activity Log
 
 Every significant action pushes an `ActivityLog` entry to `SubOrder.history`:
-- Stage submitted (by whom, which round)
+- Stage submitted / started (by whom, which round)
 - Stage approved (by whom, on behalf of if applicable)
 - Stage rejected (by whom, tags used)
 - Production gate unlocked / re-locked (by whom, reason)
 - REPLEN skip confirmed (by whom)
 - Planned date changed (from → to, by whom)
+
+### 10.8 Reviewer-Initiated Start (added during build)
+
+A Designer or Fit Technician can **start** a stage themselves from the `/pre-prod` queue, rather than waiting for the POC to mark it submitted. Gating:
+
+- The stage must be `not-started` and belong to the reviewer's role-stage set.
+- The order's pre-prod must be **unlocked** — `costStatus === 'approved' || preProdUnlocked === true`. Locked orders never produce start cards.
+- The queue surfaces only the **earliest ready** not-started stage per order — i.e. the immediately preceding stage is `approved` (or it is the first stage). This preserves the §10.1 sequencing.
+- Starting requires ≥1 photo (§10.5) and creates a new `pending` iteration, which then flows through the normal review path.
+
+> This is an extension of the original Phase 1 "POC-driven only" model. **Vendor**-initiated starts remain out of scope (Sampling module).
 
 ---
 
@@ -499,7 +539,7 @@ Extend the existing `VendorNotificationType` union:
 
 ### 11.3 Sidebar badge
 
-For `designer` and `fit-technician` roles: the `/pre-prod` sidebar item shows a badge with the count of `pending` stages assigned to the current user. Recomputed on every render from `subOrders`.
+For `designer` and `fit-technician` roles: a badge with the count of items waiting (pending reviews + ready-to-start) is shown on the **My Queue** toggle inside the page. **Not yet built:** a live count badge on the sidebar nav item itself (the entry currently has no dynamic badge) — a small follow-up to recompute from `subOrders` on render.
 
 ---
 
@@ -507,39 +547,46 @@ For `designer` and `fit-technician` roles: the `/pre-prod` sidebar item shows a 
 
 | Role | New sidebar item |
 |------|-----------------|
-| `designer` | "Pre-Production" → `/pre-prod?view=queue` with unread badge |
-| `fit-technician` | "Pre-Production" → `/pre-prod?view=queue` with unread badge |
+| `designer` | "Pre-Production" → `/pre-prod` with **stage sub-items**: Lab Dip · Strike Off · PP Sample |
+| `fit-technician` | "Pre-Production" → `/pre-prod` with **stage sub-items**: Fit Sample · PP Fit · PP Sample |
 | `sourcing-poc` | "Pre-Production" already in portfolio sub-nav; no new top-level item needed |
 | `sourcing-manager` | Access via portfolio view; no new top-level item |
+
+**Stage sub-items (added during build):** Each sub-item deep-links to `/pre-prod?tab=<stageKey>`, which the page reads to pre-filter the queue to that stage. The parent "Pre-Production" label links to the full queue (all stages) — implemented via a `linkToBase` flag on the nav item so it doesn't auto-redirect to the first sub-item. Because the sidebar's sub-items are static per entry, this is built as **two separate nav entries** (one `visibleTo: ['designer']`, one `['fit-technician']`); only one renders per role, so each reviewer sees only their own stages. Sub-item icons: Lab Dip → droplet, Strike Off → stamp, Fit Sample / PP Fit → ruler, PP Sample → shirt.
 
 ---
 
 ## 13. Mock Data to Seed
 
-### 13.1 New demo users
+### 13.1 New demo users (as built)
 
-Add to `src/lib/user-context.tsx` and the login page demo picker:
+Added to the login page demo picker:
 
 ```
-Subashree Nair   · designer       · subashree@nautinati.com  · initials: SN
-Priya M          · designer       · priyam@nautinati.com     · initials: PM  
-Meera Pillai     · fit-technician · meera@nautinati.com      · initials: MP
+Subashree Nair   · designer       · designer@demo.com  · initials: SN  (id u10)
+Meera Pillai     · fit-technician · fittech@demo.com   · initials: MP  (id u11)
 ```
 
-### 13.2 Pre-prod stage data on existing sub-orders
+(Internal user ids `u10` / `u11` are also referenced as reviewers in seeded stage iterations. "Priya M" / "Rahul K" / "Meena K" / "Rekha P" remain as historical external-reviewer names on already-approved orders but are not demo logins.)
 
-Seed `preProdStages` on at least 4 sub-orders currently in `pre-prod` stage:
+### 13.2 Pre-prod stage scenarios (as built)
+
+Seeded across sub-orders in `pre-prod` stage:
 
 | Sub-Order | Scenario |
 |-----------|----------|
-| `NNKNTW250005` | **Mid-progress** — Lab Dip ✓, Strike Off ✓, Fit Sample pending (Round 1), stages 4–7 not started |
-| `NNKNTW250008` | **Rejection iteration** — Lab Dip rejected (Round 1 by Subashree: shade-too-dark), Round 2 submitted and pending review |
-| `NNKNTW250011` | **All approved** — all 7 stages approved, production gate auto-cleared |
-| `NNKNTW250014` | **Overdue** — Lab Dip planned 2026-06-01, still pending; shows overdue chip |
+| `NNKNTW250002` | **Rejection iteration** — Lab Dip Round 1 rejected by Subashree (`shade-too-dark`), Round 2 pending review |
+| `NNKNTW250004` | **Reviewer-start** — Lab Dip approved, Strike Off not-started → designer "Start" card |
+| `NNKNTW250025` | **Overdue** — Lab Dip submitted, planned date passed, still pending → overdue chip |
+| `NNKNTW250026` | **PP Sample review** — stages 1–4 approved, PP Sample pending (appears in both Designer & Fit-Tech queues) |
+| `NNKNTW250040` | **Mid-progress** — Lab Dip ✓, Strike Off ✓, Fit Sample pending (Fit-Tech review) |
+| various | **All approved** — historical orders (e.g. `NNKNTW250011`, `…012`, `…027`) with all 7 stages approved, production gate cleared |
 
 ### 13.3 REPLEN demo order
 
-Add one REPLEN sub-order (`NNKNTW250035`) with `orderType: 'REPLEN'`, same `styleCode` and `vendor` as an existing approved-pre-prod order → triggers REPLEN skip suggestion on production gate banner.
+`NNKNTW250035` — `orderType: 'REPLEN'`, same `styleCode` + `vendor` as an existing all-approved run, all stages not-started, pre-prod unlocked. Triggers the REPLEN skip suggestion on the production gate banner, and (being unlocked) surfaces a Lab Dip "Start" card in the designer queue.
+
+> **Note:** during build, a pre-existing duplicate sub-order id `NNKNTW250032` was found (two distinct orders shared it). The non-split order (Boys Graphic Tee) was reassigned to `NNKNTW250033`; the CORAL split parent keeps `NNKNTW250032` because its `-A`/`-B` children reference it.
 
 ---
 
@@ -548,7 +595,8 @@ Add one REPLEN sub-order (`NNKNTW250035`) with `orderType: 'REPLEN'`, same `styl
 | Route | View | Who sees it |
 |-------|------|-------------|
 | `/portfolio/[id]?tab=pre-prod` | Stage tracker + production gate | POC, Manager, Director |
-| `/pre-prod?view=queue` | Pending approval queue | Designer, Fit Tech (+ POC/Manager read) |
+| `/pre-prod?view=queue` | Review + Start queue (all stages) | Designer, Fit Tech |
+| `/pre-prod?tab=<stageKey>` | Queue pre-filtered to one stage (from sidebar) | Designer, Fit Tech |
 | `/pre-prod?view=history` | Personal approval timeline | Designer, Fit Tech (own history) |
 | `/portfolio?tab=pre-production` | Portfolio health view | Manager, Director, POC |
 | `/vendor-portal?view=pre-prod` | Read-only stage status + notifications | Vendor |
