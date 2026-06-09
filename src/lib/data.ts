@@ -1,4 +1,54 @@
-import type { SubOrder, QueueItem, Notification, User, Vendor, VendorRFQ } from './types'
+import type { SubOrder, QueueItem, Notification, User, Vendor, VendorRFQ, PreProdStage, PreProdStageKey, PreProdIteration } from './types'
+
+// ─── Pre-prod stage builder helpers ───────────────────────────────────────────
+
+function mkIter(n: number, date: string, status: 'approved'|'rejected'|'pending', revName?: string, revId?: string, revRole?: string, rejNotes?: string, rejTags?: string[]): PreProdIteration {
+  return {
+    id: `iter-${n}-${date}`, iterationNumber: n,
+    submittedAt: date, submittedById: 'u1', submittedByName: 'Parthipan Kumar',
+    photos: [],
+    status,
+    reviewedById:  status !== 'pending' ? revId   : undefined,
+    reviewerName:  status !== 'pending' ? revName : undefined,
+    reviewerRole:  status !== 'pending' ? revRole : undefined,
+    reviewedAt:    status !== 'pending' ? date    : undefined,
+    rejectionNotes: rejNotes, rejectionTags: rejTags,
+  }
+}
+
+function aStg(key: PreProdStageKey, planned: string, actual: string, revName: string, revId: string, revRole: 'designer'|'fit-technician'|'sourcing-poc', gate: 'hard'|'soft'): PreProdStage {
+  const NAMES: Record<PreProdStageKey, string> = {
+    'lab-dip': 'Lab Dip', 'strike-off': 'Strike Off', 'fit-sample': 'Fit Sample',
+    'fabric-inward': 'Fabric Inward (FD Status)', 'pp-sample': 'PP Sample (4B / Commercial)',
+    'gpt': 'GPT (Garment Processing Test)', 'pp-fit': 'PP Fit',
+  }
+  return {
+    id: `pp-${key}`, stageKey: key, name: NAMES[key], gate, reviewerRole: revRole, plannedDate: planned,
+    status: 'approved',
+    currentIteration: mkIter(1, actual, 'approved', revName, revId, revRole),
+    pastIterations: [],
+  }
+}
+
+function nsStg(key: PreProdStageKey, planned: string, revRole: 'designer'|'fit-technician'|'sourcing-poc', gate: 'hard'|'soft'): PreProdStage {
+  const NAMES: Record<PreProdStageKey, string> = {
+    'lab-dip': 'Lab Dip', 'strike-off': 'Strike Off', 'fit-sample': 'Fit Sample',
+    'fabric-inward': 'Fabric Inward (FD Status)', 'pp-sample': 'PP Sample (4B / Commercial)',
+    'gpt': 'GPT (Garment Processing Test)', 'pp-fit': 'PP Fit',
+  }
+  return { id: `pp-${key}`, stageKey: key, name: NAMES[key], gate, reviewerRole: revRole, plannedDate: planned, status: 'not-started', currentIteration: undefined, pastIterations: [] }
+}
+
+function pendStg(key: PreProdStageKey, planned: string, submittedAt: string, revRole: 'designer'|'fit-technician'|'sourcing-poc', gate: 'hard'|'soft', iterNum = 1, photos: string[] = []): PreProdStage {
+  const NAMES: Record<PreProdStageKey, string> = {
+    'lab-dip': 'Lab Dip', 'strike-off': 'Strike Off', 'fit-sample': 'Fit Sample',
+    'fabric-inward': 'Fabric Inward (FD Status)', 'pp-sample': 'PP Sample (4B / Commercial)',
+    'gpt': 'GPT (Garment Processing Test)', 'pp-fit': 'PP Fit',
+  }
+  return { id: `pp-${key}`, stageKey: key, name: NAMES[key], gate, reviewerRole: revRole, plannedDate: planned, status: 'pending',
+    currentIteration: { id: `iter-${iterNum}-${submittedAt}`, iterationNumber: iterNum, submittedAt, submittedById: 'u1', submittedByName: 'Parthipan Kumar', photos, status: 'pending' },
+    pastIterations: [] }
+}
 
 // ─── Current User ─────────────────────────────────────────────────────────────
 
@@ -68,13 +118,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'BLR', poNumber: 'PPO-0612B', qty: 150 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-04-01', actualDate: '2026-04-03', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-04-05', actualDate: '2026-04-06', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-04-08', actualDate: '2026-04-09', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-04-10', actualDate: '2026-04-11', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-04-12', actualDate: '2026-04-13', approvedBy: 'Priya M + Rahul K', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-04-13', actualDate: '2026-04-14', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-14', actualDate: '2026-04-14', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-04-01', '2026-04-03', 'Priya M',          'ext-d1', 'designer',         'hard'),
+      aStg('strike-off',   '2026-04-05', '2026-04-06', 'Priya M',          'ext-d1', 'designer',         'soft'),
+      aStg('fit-sample',   '2026-04-08', '2026-04-09', 'Rahul K',          'ext-f1', 'fit-technician',   'hard'),
+      aStg('fabric-inward','2026-04-10', '2026-04-11', 'Parthipan Kumar',  'u1',     'sourcing-poc',     'hard'),
+      aStg('pp-sample',    '2026-04-12', '2026-04-13', 'Priya M',          'ext-d1', 'designer',         'soft'),
+      aStg('gpt',          '2026-04-13', '2026-04-14', 'Parthipan Kumar',  'u1',     'sourcing-poc',     'soft'),
+      aStg('pp-fit',       '2026-04-14', '2026-04-14', 'Rahul K',          'ext-f1', 'fit-technician',   'soft'),
     ],
     productionHistory: [
       { date: '2026-04-12', cutQty: 360, sewingQty: 290, packedQty: 0, updatedBy: 'Parthipan Kumar', onBehalfOf: 'Bharti Apparels' },
@@ -134,13 +184,25 @@ export const subOrders: SubOrder[] = [
     grnQty: 0,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0620M', qty: 150 }, { warehouse: 'GUR', poNumber: 'PPO-0620S', qty: 150 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-04-02', actualDate: '2026-04-04', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-04-06', actualDate: '2026-04-07', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-04-09', actualDate: '2026-04-10', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-04-11', actualDate: '2026-04-12', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'overdue', plannedDate: '2026-04-10', approvedBy: undefined, approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'not-started', plannedDate: '2026-04-18', approvedBy: undefined, approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'not-started', plannedDate: '2026-04-20', approvedBy: undefined, approverRole: 'Fit Technician' },
+      // Lab Dip: Round 1 rejected by Subashree, Round 2 pending — demo scenario
+      {
+        id: 'pp-lab-dip', stageKey: 'lab-dip', name: 'Lab Dip', gate: 'hard', reviewerRole: 'designer',
+        plannedDate: '2026-04-02', status: 'pending',
+        currentIteration: { id: 'iter-2-2026-04-08', iterationNumber: 2, submittedAt: '2026-04-08', submittedById: 'u1', submittedByName: 'Parthipan Kumar', photos: ['https://placehold.co/400x300?text=Lab+Dip+R2'], status: 'pending' },
+        pastIterations: [{
+          id: 'iter-1-2026-04-04', iterationNumber: 1, submittedAt: '2026-04-04', submittedById: 'u1', submittedByName: 'Parthipan Kumar',
+          photos: ['https://placehold.co/400x300?text=Lab+Dip+R1'],
+          status: 'rejected', reviewedById: 'u10', reviewerName: 'Subashree Nair', reviewerRole: 'designer', reviewedAt: '2026-04-06',
+          rejectionNotes: 'Shade is visibly darker than the buyer reference swatch. Please re-dye to match exact Pantone 16-1546 TCX.',
+          rejectionTags: ['shade-too-dark'],
+        }],
+      },
+      nsStg('strike-off',    '2026-04-10', 'designer',         'soft'),
+      nsStg('fit-sample',    '2026-04-14', 'fit-technician',   'hard'),
+      nsStg('fabric-inward', '2026-04-18', 'sourcing-poc',     'hard'),
+      nsStg('pp-sample',     '2026-04-22', 'designer',         'soft'),
+      nsStg('gpt',           '2026-04-26', 'sourcing-poc',     'soft'),
+      nsStg('pp-fit',        '2026-04-28', 'fit-technician',   'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -189,13 +251,13 @@ export const subOrders: SubOrder[] = [
     grnQty: 0,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0605M', qty: 200 }, { warehouse: 'GUR', poNumber: 'PPO-0605S', qty: 120 }, { warehouse: 'BLR', poNumber: 'PPO-0605B', qty: 80 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-15', actualDate: '2026-03-16', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-03-18', actualDate: '2026-03-19', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-03-22', actualDate: '2026-03-23', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-03-25', actualDate: '2026-03-26', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-03-28', actualDate: '2026-03-30', approvedBy: 'Priya M + Rahul K', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-03-31', actualDate: '2026-04-01', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-02', actualDate: '2026-04-02', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-15', '2026-03-16', 'Priya M',         'ext-d1', 'designer',         'hard'),
+      aStg('strike-off',   '2026-03-18', '2026-03-19', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('fit-sample',   '2026-03-22', '2026-03-23', 'Rahul K',         'ext-f1', 'fit-technician',   'hard'),
+      aStg('fabric-inward','2026-03-25', '2026-03-26', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'hard'),
+      aStg('pp-sample',    '2026-03-28', '2026-03-30', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('gpt',          '2026-03-31', '2026-04-01', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'soft'),
+      aStg('pp-fit',       '2026-04-02', '2026-04-02', 'Rahul K',         'ext-f1', 'fit-technician',   'soft'),
     ],
     productionHistory: [
       { date: '2026-04-13', cutQty: 400, sewingQty: 390, packedQty: 385, updatedBy: 'IDS Fashion' },
@@ -242,13 +304,14 @@ export const subOrders: SubOrder[] = [
     grnQty: 0,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0625M', qty: 200 }, { warehouse: 'GUR', poNumber: 'PPO-0625S', qty: 150 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'pending', plannedDate: '2026-04-14', approvedBy: undefined, approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'not-started', plannedDate: '2026-04-18', approvedBy: undefined, approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'not-started', plannedDate: '2026-04-22', approvedBy: undefined, approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'not-started', plannedDate: '2026-04-25', approvedBy: undefined, approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'not-started', plannedDate: '2026-04-28', approvedBy: undefined, approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'not-started', plannedDate: '2026-04-30', approvedBy: undefined, approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'not-started', plannedDate: '2026-05-02', approvedBy: undefined, approverRole: 'Fit Technician' },
+      // Lab Dip approved → Strike Off ready to start (demo: reviewer-initiated start)
+      aStg('lab-dip',        '2026-04-14', '2026-04-13', 'Subashree Nair', 'u10', 'designer',       'hard'),
+      nsStg('strike-off',    '2026-04-18', 'designer',         'soft'),
+      nsStg('fit-sample',    '2026-04-22', 'fit-technician',   'hard'),
+      nsStg('fabric-inward', '2026-04-25', 'sourcing-poc',     'hard'),
+      nsStg('pp-sample',     '2026-04-28', 'designer',         'soft'),
+      nsStg('gpt',           '2026-04-30', 'sourcing-poc',     'soft'),
+      nsStg('pp-fit',        '2026-05-02', 'fit-technician',   'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -327,13 +390,13 @@ export const subOrders: SubOrder[] = [
     grnQty: 0,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0608M', qty: 250 }, { warehouse: 'GUR', poNumber: 'PPO-0608S', qty: 200 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-28', actualDate: '2026-03-29', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-04-01', actualDate: '2026-04-02', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-04-04', actualDate: '2026-04-05', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-04-06', actualDate: '2026-04-07', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-04-08', actualDate: '2026-04-09', approvedBy: 'Priya M + Rahul K', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-04-10', actualDate: '2026-04-10', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-11', actualDate: '2026-04-11', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-28', '2026-03-29', 'Priya M',         'ext-d1', 'designer',         'hard'),
+      aStg('strike-off',   '2026-04-01', '2026-04-02', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('fit-sample',   '2026-04-04', '2026-04-05', 'Rahul K',         'ext-f1', 'fit-technician',   'hard'),
+      aStg('fabric-inward','2026-04-06', '2026-04-07', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'hard'),
+      aStg('pp-sample',    '2026-04-08', '2026-04-09', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('gpt',          '2026-04-10', '2026-04-10', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'soft'),
+      aStg('pp-fit',       '2026-04-11', '2026-04-11', 'Rahul K',         'ext-f1', 'fit-technician',   'soft'),
     ],
     productionHistory: [
       { date: '2026-04-13', cutQty: 280, sewingQty: 210, packedQty: 0, updatedBy: 'AND DESIGN' },
@@ -378,13 +441,13 @@ export const subOrders: SubOrder[] = [
     grnQty: 0,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0598M', qty: 180 }, { warehouse: 'GUR', poNumber: 'PPO-0598S', qty: 170 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-10', actualDate: '2026-03-11', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-03-14', actualDate: '2026-03-15', approvedBy: 'Priya M', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-03-18', actualDate: '2026-03-19', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-03-20', actualDate: '2026-03-21', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-03-24', actualDate: '2026-03-25', approvedBy: 'Priya M + Rahul K', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT', status: 'approved', plannedDate: '2026-03-26', actualDate: '2026-03-26', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-03-28', actualDate: '2026-03-28', approvedBy: 'Rahul K', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-10', '2026-03-11', 'Priya M',         'ext-d1', 'designer',         'hard'),
+      aStg('strike-off',   '2026-03-14', '2026-03-15', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('fit-sample',   '2026-03-18', '2026-03-19', 'Rahul K',         'ext-f1', 'fit-technician',   'hard'),
+      aStg('fabric-inward','2026-03-20', '2026-03-21', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'hard'),
+      aStg('pp-sample',    '2026-03-24', '2026-03-25', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('gpt',          '2026-03-26', '2026-03-26', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'soft'),
+      aStg('pp-fit',       '2026-03-28', '2026-03-28', 'Rahul K',         'ext-f1', 'fit-technician',   'soft'),
     ],
     productionHistory: [{ date: '2026-04-13', cutQty: 350, sewingQty: 345, packedQty: 320, updatedBy: 'PESOS VISION' }],
     fiRequests: [],
@@ -424,13 +487,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'BLR', poNumber: 'PPO-0780B', qty: 160 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip',                        status: 'approved',     plannedDate: '2026-04-18', actualDate: '2026-04-19', approvedBy: 'Priya M',          approverRole: 'Designer'           },
-      { id: 'pp2', name: 'Strike Off',                     status: 'approved',     plannedDate: '2026-04-22', actualDate: '2026-04-23', approvedBy: 'Priya M',          approverRole: 'Designer'           },
-      { id: 'pp3', name: 'Fit Sample',                     status: 'pending',      plannedDate: '2026-04-28',                                                          approverRole: 'Fit Technician'     },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)',      status: 'not-started',  plannedDate: '2026-05-02',                                                          approverRole: 'POC'                },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)',    status: 'not-started',  plannedDate: '2026-05-08',                                                          approverRole: 'Designer + Fit Tech'},
-      { id: 'pp6', name: 'GPT (Garment Processing Test)',  status: 'not-started',  plannedDate: '2026-05-12',                                                          approverRole: 'POC'                },
-      { id: 'pp7', name: 'PP Fit',                         status: 'not-started',  plannedDate: '2026-05-15',                                                          approverRole: 'Fit Technician'     },
+      aStg('lab-dip',      '2026-04-18', '2026-04-19', 'Subashree Nair',   'u10', 'designer',       'hard'),
+      aStg('strike-off',   '2026-04-22', '2026-04-23', 'Subashree Nair',   'u10', 'designer',       'soft'),
+      pendStg('fit-sample','2026-04-28', '2026-04-26',  'fit-technician',  'hard', 1, ['https://placehold.co/400x300?text=Fit+Sample+Front', 'https://placehold.co/400x300?text=Fit+Sample+Back']),
+      nsStg('fabric-inward','2026-05-02', 'sourcing-poc',   'hard'),
+      nsStg('pp-sample',   '2026-05-08', 'designer',        'soft'),
+      nsStg('gpt',         '2026-05-12', 'sourcing-poc',    'soft'),
+      nsStg('pp-fit',      '2026-05-15', 'fit-technician',  'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -520,13 +583,13 @@ export const subOrders: SubOrder[] = [
     grnQty: 390,
     poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0565M', qty: 220 }, { warehouse: 'GUR', poNumber: 'PPO-0565S', qty: 180 }],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip',                       status: 'approved', plannedDate: '2026-02-08', actualDate: '2026-02-10', approvedBy: 'Priya M',          approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off',                     status: 'approved', plannedDate: '2026-02-14', actualDate: '2026-02-15', approvedBy: 'Priya M',          approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample',                     status: 'approved', plannedDate: '2026-02-20', actualDate: '2026-02-22', approvedBy: 'Rahul K',          approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)',      status: 'approved', plannedDate: '2026-02-25', actualDate: '2026-02-26', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)',    status: 'approved', plannedDate: '2026-03-02', actualDate: '2026-03-04', approvedBy: 'Priya M + Rahul K', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-03-06', actualDate: '2026-03-07', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit',                         status: 'approved', plannedDate: '2026-03-09', actualDate: '2026-03-09', approvedBy: 'Rahul K',          approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-02-08', '2026-02-10', 'Priya M',         'ext-d1', 'designer',         'hard'),
+      aStg('strike-off',   '2026-02-14', '2026-02-15', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('fit-sample',   '2026-02-20', '2026-02-22', 'Rahul K',         'ext-f1', 'fit-technician',   'hard'),
+      aStg('fabric-inward','2026-02-25', '2026-02-26', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'hard'),
+      aStg('pp-sample',    '2026-03-02', '2026-03-04', 'Priya M',         'ext-d1', 'designer',         'soft'),
+      aStg('gpt',          '2026-03-06', '2026-03-07', 'Parthipan Kumar', 'u1',     'sourcing-poc',     'soft'),
+      aStg('pp-fit',       '2026-03-09', '2026-03-09', 'Rahul K',         'ext-f1', 'fit-technician',   'soft'),
     ],
     productionHistory: [],
     fiRequests: [{ id: 'fi1', requestedDate: '2026-04-05', scheduledDate: '2026-04-06', assignedInspector: 'Rishabh Sharma', status: 'pass', fiQty: 390, result: 'pass', round: 1 }],
@@ -714,7 +777,7 @@ export const subOrders: SubOrder[] = [
   },
   // ── Lifecycle Stage: Assigned (POC assigned, RFQ not started) ────────────────
   {
-    id: 'NNKNTW250032',
+    id: 'NNKNTW250033',
     styleCode: 'NN322-091',
     styleName: 'Boys Graphic Tee',
     colour: 'NAVY',
@@ -1095,13 +1158,14 @@ export const subOrders: SubOrder[] = [
     cutQty: 0, sewingQty: 0, packedQty: 0, fiQty: 0, dispatchedQty: 0, grnQty: 0,
     poNumbers: [],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'not-started', plannedDate: '2026-04-22', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'not-started', plannedDate: '2026-04-26', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'not-started', plannedDate: '2026-04-30', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'not-started', plannedDate: '2026-05-04', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'not-started', plannedDate: '2026-05-08', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'not-started', plannedDate: '2026-05-10', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'not-started', plannedDate: '2026-05-12', approverRole: 'Fit Technician' },
+      // Lab Dip overdue — submitted but planned date passed, still pending (demo: overdue scenario)
+      pendStg('lab-dip',     '2026-05-01', '2026-05-05', 'designer',       'hard', 1, ['https://placehold.co/400x300?text=Lab+Dip+Swatch']),
+      nsStg('strike-off',    '2026-05-06', 'designer',         'soft'),
+      nsStg('fit-sample',    '2026-05-10', 'fit-technician',   'hard'),
+      nsStg('fabric-inward', '2026-05-14', 'sourcing-poc',     'hard'),
+      nsStg('pp-sample',     '2026-05-18', 'designer',         'soft'),
+      nsStg('gpt',           '2026-05-20', 'sourcing-poc',     'soft'),
+      nsStg('pp-fit',        '2026-05-22', 'fit-technician',   'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -1144,13 +1208,14 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'GUR', poNumber: 'PPO-0640S', qty: 120 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-04-05', actualDate: '2026-04-06', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-04-09', actualDate: '2026-04-10', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-04-13', actualDate: '2026-04-14', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'pending', plannedDate: '2026-04-17', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'not-started', plannedDate: '2026-04-21', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'not-started', plannedDate: '2026-04-24', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'not-started', plannedDate: '2026-04-26', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-04-05', '2026-04-06', 'Subashree Nair',  'u10', 'designer',        'hard'),
+      aStg('strike-off',   '2026-04-09', '2026-04-10', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('fit-sample',   '2026-04-13', '2026-04-14', 'Meera Pillai',    'u11', 'fit-technician',  'hard'),
+      aStg('fabric-inward','2026-04-17', '2026-04-18', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'hard'),
+      // PP Sample pending — dual reviewer (Designer + Fit Tech both see it)
+      pendStg('pp-sample', '2026-04-21', '2026-04-20', 'designer',        'soft', 1, ['https://placehold.co/400x300?text=PP+Sample+Front']),
+      nsStg('gpt',         '2026-04-24', 'sourcing-poc',    'soft'),
+      nsStg('pp-fit',      '2026-04-26', 'fit-technician',  'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -1195,13 +1260,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'GUR', poNumber: 'PPO-0632S', qty: 140 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-04-01', actualDate: '2026-04-02', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-04-05', actualDate: '2026-04-06', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-04-08', actualDate: '2026-04-09', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-04-10', actualDate: '2026-04-11', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-04-13', actualDate: '2026-04-14', approvedBy: 'Meena K + Rekha P', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-04-15', actualDate: '2026-04-15', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-16', actualDate: '2026-04-16', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-04-01', '2026-04-02', 'Subashree Nair',  'u10', 'designer',        'hard'),
+      aStg('strike-off',   '2026-04-05', '2026-04-06', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('fit-sample',   '2026-04-08', '2026-04-09', 'Meera Pillai',    'u11', 'fit-technician',  'hard'),
+      aStg('fabric-inward','2026-04-10', '2026-04-11', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'hard'),
+      aStg('pp-sample',    '2026-04-13', '2026-04-14', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('gpt',          '2026-04-15', '2026-04-15', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'soft'),
+      aStg('pp-fit',       '2026-04-16', '2026-04-16', 'Meera Pillai',    'u11', 'fit-technician',  'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -1246,13 +1311,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'GUR', poNumber: 'PPO-0618S', qty: 80 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-22', actualDate: '2026-03-23', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-03-26', actualDate: '2026-03-27', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-03-30', actualDate: '2026-03-31', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-04-02', actualDate: '2026-04-03', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-04-05', actualDate: '2026-04-06', approvedBy: 'Meena K + Rekha P', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-04-07', actualDate: '2026-04-07', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-08', actualDate: '2026-04-09', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-22', '2026-03-23', 'Subashree Nair',  'u10', 'designer',        'hard'),
+      aStg('strike-off',   '2026-03-26', '2026-03-27', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('fit-sample',   '2026-03-30', '2026-03-31', 'Meera Pillai',    'u11', 'fit-technician',  'hard'),
+      aStg('fabric-inward','2026-04-02', '2026-04-03', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'hard'),
+      aStg('pp-sample',    '2026-04-05', '2026-04-06', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('gpt',          '2026-04-07', '2026-04-07', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'soft'),
+      aStg('pp-fit',       '2026-04-08', '2026-04-09', 'Meera Pillai',    'u11', 'fit-technician',  'soft'),
     ],
     productionHistory: [],
     fiRequests: [],
@@ -1296,13 +1361,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'GUR', poNumber: 'PPO-0595S', qty: 140 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-10', actualDate: '2026-03-11', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-03-14', actualDate: '2026-03-15', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-03-18', actualDate: '2026-03-19', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-03-22', actualDate: '2026-03-23', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-03-26', actualDate: '2026-03-27', approvedBy: 'Meena K + Rekha P', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-03-29', actualDate: '2026-03-29', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-04-01', actualDate: '2026-04-01', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-10', '2026-03-11', 'Subashree Nair',  'u10', 'designer',        'hard'),
+      aStg('strike-off',   '2026-03-14', '2026-03-15', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('fit-sample',   '2026-03-18', '2026-03-19', 'Meera Pillai',    'u11', 'fit-technician',  'hard'),
+      aStg('fabric-inward','2026-03-22', '2026-03-23', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'hard'),
+      aStg('pp-sample',    '2026-03-26', '2026-03-27', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('gpt',          '2026-03-29', '2026-03-29', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'soft'),
+      aStg('pp-fit',       '2026-04-01', '2026-04-01', 'Meera Pillai',    'u11', 'fit-technician',  'soft'),
     ],
     productionHistory: [
       { date: '2026-04-14', cutQty: 328, sewingQty: 322, packedQty: 315, updatedBy: 'Arihant Fashions' },
@@ -1349,13 +1414,13 @@ export const subOrders: SubOrder[] = [
       { warehouse: 'GUR', poNumber: 'PPO-0588S', qty: 100 },
     ],
     preProdStages: [
-      { id: 'pp1', name: 'Lab Dip', status: 'approved', plannedDate: '2026-03-05', actualDate: '2026-03-06', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp2', name: 'Strike Off', status: 'approved', plannedDate: '2026-03-10', actualDate: '2026-03-11', approvedBy: 'Meena K', approverRole: 'Designer' },
-      { id: 'pp3', name: 'Fit Sample', status: 'approved', plannedDate: '2026-03-14', actualDate: '2026-03-15', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
-      { id: 'pp4', name: 'Fabric Inward (FD Status)', status: 'approved', plannedDate: '2026-03-18', actualDate: '2026-03-19', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp5', name: 'PP Sample (4B / Commercial)', status: 'approved', plannedDate: '2026-03-22', actualDate: '2026-03-23', approvedBy: 'Meena K + Rekha P', approverRole: 'Designer + Fit Tech' },
-      { id: 'pp6', name: 'GPT (Garment Processing Test)', status: 'approved', plannedDate: '2026-03-25', actualDate: '2026-03-25', approvedBy: 'Parthipan Kumar', approverRole: 'POC' },
-      { id: 'pp7', name: 'PP Fit', status: 'approved', plannedDate: '2026-03-27', actualDate: '2026-03-27', approvedBy: 'Rekha P', approverRole: 'Fit Technician' },
+      aStg('lab-dip',      '2026-03-05', '2026-03-06', 'Subashree Nair',  'u10', 'designer',        'hard'),
+      aStg('strike-off',   '2026-03-10', '2026-03-11', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('fit-sample',   '2026-03-14', '2026-03-15', 'Meera Pillai',    'u11', 'fit-technician',  'hard'),
+      aStg('fabric-inward','2026-03-18', '2026-03-19', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'hard'),
+      aStg('pp-sample',    '2026-03-22', '2026-03-23', 'Subashree Nair',  'u10', 'designer',        'soft'),
+      aStg('gpt',          '2026-03-25', '2026-03-25', 'Parthipan Kumar', 'u1',  'sourcing-poc',    'soft'),
+      aStg('pp-fit',       '2026-03-27', '2026-03-27', 'Meera Pillai',    'u11', 'fit-technician',  'soft'),
     ],
     productionHistory: [
       { date: '2026-04-12', cutQty: 245, sewingQty: 242, packedQty: 238, updatedBy: 'BS Fashion' },
@@ -1518,7 +1583,58 @@ export const subOrders: SubOrder[] = [
       { id: 'h1', timestamp: '2026-06-01T09:00:00', actor: 'Parthipan Kumar', actorRole: 'Sourcing POC', action: 'Child allocation created — SWARA CREATION', details: '360 pcs from NNKNTW250032 split' },
     ],
   },
+  // ── REPLEN demo — production gate skip suggestion ─────────────────────────
+  {
+    id: 'NNKNTW250035',
+    styleCode: 'NN311-067',        // same styleCode as NNKNTW250011 (all-approved REPLEN)
+    styleName: 'Girls Top and Bottom Set',
+    colour: 'TEAL',
+    category: 'Knits',
+    product: 'Top and Bottom',
+    season: 'AW26',
+    orderType: 'REPLEN',
+    tier: 'TIER-1',
+    gender: 'Girls',
+    ageGroup: '0-3 Y',
+    fabricQuality: 'Rayon Twill / Cotton Voile',
+    vendor: vendors[0],            // same vendor as NNKNTW250011 — triggers skip suggestion
+    poc: currentUser,
+    status: 'on-track',
+    currentStage: 'pre-prod',
+    atRisk: false,
+    handoverDate: '2026-05-10',
+    orderToVendorDate: '2026-05-18',
+    buyingExpectedInwardDate: '2026-08-20',
+    vendorPromisedDate: '2026-08-18',
+    costingApprovedDate: '2026-05-25',
+    targetPrice: 255,
+    closedCost: 242,
+    costStatus: 'approved',
+    orderQty: 400,
+    cutQty: 0, sewingQty: 0, packedQty: 0, fiQty: 0, dispatchedQty: 0, grnQty: 0,
+    poNumbers: [{ warehouse: 'MUM', poNumber: 'PPO-0820M', qty: 220 }, { warehouse: 'GUR', poNumber: 'PPO-0820S', qty: 180 }],
+    preProdStages: [
+      nsStg('lab-dip',      '2026-06-10', 'designer',        'hard'),
+      nsStg('strike-off',   '2026-06-14', 'designer',        'soft'),
+      nsStg('fit-sample',   '2026-06-18', 'fit-technician',  'hard'),
+      nsStg('fabric-inward','2026-06-22', 'sourcing-poc',    'hard'),
+      nsStg('pp-sample',    '2026-06-26', 'designer',        'soft'),
+      nsStg('gpt',          '2026-06-30', 'sourcing-poc',    'soft'),
+      nsStg('pp-fit',       '2026-07-04', 'fit-technician',  'soft'),
+    ],
+    productionHistory: [],
+    fiRequests: [],
+    history: [
+      { id: 'h1', timestamp: '2026-05-25T09:00:00', actor: 'System', actorRole: 'Auto', action: 'Costing auto-approved', details: '₹242 ≤ ₹255 target' },
+    ],
+  },
 ]
+
+// ─── Demo users for login (designer + fit-technician) ─────────────────────────
+export const demoUsers = {
+  designer:     { id: 'u10', name: 'Subashree Nair', initials: 'SN', role: 'designer' as const,         brand: 'Nautinati', email: 'subashree@tmrw.com'   },
+  fitTech:      { id: 'u11', name: 'Meera Pillai',   initials: 'MP', role: 'fit-technician' as const,   brand: 'Nautinati', email: 'meera@tmrw.com'       },
+}
 
 // ─── Queue Items ──────────────────────────────────────────────────────────────
 

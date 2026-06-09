@@ -13,6 +13,9 @@ export type SpineStage =
   | 'grn'
 
 export type PreProdStageStatus = 'not-started' | 'pending' | 'approved' | 'rejected' | 'overdue'
+export type PreProdStageKey =
+  | 'lab-dip' | 'strike-off' | 'fit-sample'
+  | 'fabric-inward' | 'pp-sample' | 'gpt' | 'pp-fit'
 export type FIStatus = 'new' | 'not-ready' | 'scheduled' | 'in-progress' | 'pass' | 'fail' | 'hold' | 're-inspection'
 export type OrderType = 'NEW' | 'REPLEN'
 export type Tier = 'HERO' | 'TIER-1' | 'TIER-2' | 'TAIL'
@@ -91,10 +94,19 @@ export interface SubOrder {
 
   // Pre-production
   preProdStages: PreProdStage[]
-  preProdUnlocked?: boolean       // manually unlocked before costing approval
-  preProdUnlockReason?: string    // mandatory reason entered at unlock time
-  preProdUnlockedBy?: string      // name of person who last toggled it
-  preProdUnlockedAt?: string      // ISO date string
+  preProdUnlocked?: boolean
+  preProdUnlockReason?: string
+  preProdUnlockedBy?: string
+  preProdUnlockedAt?: string
+  // Production gate
+  productionUnlocked?: boolean
+  productionUnlockReason?: string
+  productionUnlockedBy?: string
+  productionUnlockedAt?: string
+  // REPLEN pre-prod skip
+  preprodSkippedForReplen?: boolean
+  preprodSkipConfirmedBy?: string
+  preprodSkipConfirmedAt?: string
 
   // Production history
   productionHistory: ProductionEntry[]
@@ -132,16 +144,51 @@ export interface Vendor {
 
 // ─── Pre-Production ───────────────────────────────────────────────────────────
 
+export interface PPSampleApproval {
+  reviewerId: string
+  reviewerName: string
+  reviewerRole: 'designer' | 'fit-technician'
+  status: 'pending' | 'approved' | 'rejected'
+  actedAt?: string
+  approvalNotes?: string
+  rejectionNotes?: string
+  rejectionTags?: string[]
+  recordedByPocId?: string
+  recordedByPocName?: string
+}
+
+export interface PreProdIteration {
+  id: string
+  iterationNumber: number
+  submittedAt: string
+  submittedById: string
+  submittedByName: string
+  photos: string[]
+  status: 'pending' | 'approved' | 'rejected'
+  reviewedById?: string
+  reviewerName?: string
+  reviewerRole?: string
+  reviewedAt?: string
+  approvalNotes?: string
+  rejectionNotes?: string
+  rejectionTags?: string[]
+  recordedByPocId?: string
+  recordedByPocName?: string
+  // PP Sample only — dual approval
+  designerApproval?: PPSampleApproval
+  fitTechApproval?: PPSampleApproval
+}
+
 export interface PreProdStage {
   id: string
+  stageKey: PreProdStageKey
   name: string
-  status: PreProdStageStatus
+  status: PreProdStageStatus     // derived from currentIteration
+  gate: 'hard' | 'soft'
+  reviewerRole: 'designer' | 'fit-technician' | 'sourcing-poc'
   plannedDate: string
-  actualDate?: string
-  approvedBy?: string
-  approverRole?: string
-  remarks?: string
-  photoUrl?: string
+  currentIteration?: PreProdIteration
+  pastIterations: PreProdIteration[]
 }
 
 // ─── Production ───────────────────────────────────────────────────────────────

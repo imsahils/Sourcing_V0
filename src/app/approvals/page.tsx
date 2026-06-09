@@ -265,10 +265,10 @@ export default function ApprovalsPage() {
           stageName:    stage.name,
           status:       stage.status as any,
           plannedDate:  stage.plannedDate,
-          actualDate:   stage.actualDate,
+          actualDate:   stage.currentIteration?.reviewedAt,
           submittedBy:  s.vendor.name,
-          approverRole: stage.approverRole || '—',
-          remarks:      stage.remarks,
+          approverRole: stage.reviewerRole || '—',
+          remarks:      stage.currentIteration?.approvalNotes,
         }))
     ), [])
 

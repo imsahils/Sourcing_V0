@@ -36,7 +36,9 @@ const DEMO_USERS: {
   { id: 'u6', name: 'Arul Pandey',     email: 'inspector@demo.com', password: 'demo', role: 'qa-inspector',  initials: 'AP', department: 'QA',        avatarColor: '#0F766E', redirect: '/inspector' },
   { id: 'u7', name: 'Sunit Jain',      email: 'warehouse@demo.com', password: 'demo', role: 'warehouse-ops', initials: 'SJ', department: 'Warehouse', avatarColor: '#6B7280', redirect: '/warehouse' },
   { id: 'u8', name: 'Bharti Apparels', email: 'vendor@demo.com',    password: 'demo', role: 'vendor',        initials: 'BA', department: 'Vendor',    avatarColor: '#78716C', redirect: '/vendor-portal', vendorId: 'v1' },
-  { id: 'u9', name: 'Riya Kapoor',     email: 'mis@demo.com',       password: 'demo', role: 'sourcing-mis',  initials: 'RK', department: 'Sourcing',  avatarColor: '#A8A29E', redirect: '/purchase-orders' },
+  { id: 'u9',  name: 'Riya Kapoor',     email: 'mis@demo.com',       password: 'demo', role: 'sourcing-mis',   initials: 'RK', department: 'Sourcing', avatarColor: '#A8A29E', redirect: '/purchase-orders' },
+  { id: 'u10', name: 'Subashree Nair',  email: 'designer@demo.com',  password: 'demo', role: 'designer',       initials: 'SN', department: 'Design',   avatarColor: '#DB2777', redirect: '/pre-prod?view=queue' },
+  { id: 'u11', name: 'Meera Pillai',    email: 'fittech@demo.com',   password: 'demo', role: 'fit-technician', initials: 'MP', department: 'Design',   avatarColor: '#7C3AED', redirect: '/pre-prod?view=queue' },
 ]
 
 const ROLE_LABEL: Record<UserRole, string> = {

@@ -12,8 +12,10 @@ import { createContext, useContext, useState, useCallback, type ReactNode } from
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type VendorNotifType =
-  | 'preprod-unlocked'   // POC unlocked pre-prod — vendor can proceed
-  | 'preprod-relocked'   // costing rejected — vendor must pause
+  | 'preprod-unlocked'          // POC unlocked pre-prod — vendor can proceed
+  | 'preprod-relocked'          // costing rejected — vendor must pause
+  | 'preprod-stage-approved'    // a pre-prod stage was approved — vendor can prep next
+  | 'preprod-stage-rejected'    // a pre-prod stage was rejected — vendor must resubmit
 
 export interface VendorNotification {
   id: string
@@ -23,8 +25,10 @@ export interface VendorNotification {
   styleCode: string
   styleName: string
   colour: string
-  reason?: string          // unlock reason (for 'preprod-unlocked')
-  unlockedBy?: string      // POC name
+  reason?: string           // unlock reason (for 'preprod-unlocked') or rejection notes
+  unlockedBy?: string       // POC name
+  stageName?: string        // for preprod-stage-approved/rejected
+  rejectionTags?: string[]  // for preprod-stage-rejected
   createdAt: string        // ISO timestamp
   read: boolean
 }

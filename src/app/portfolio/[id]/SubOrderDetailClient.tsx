@@ -15,9 +15,10 @@ import { StatusBadge, PreProdStageBadge, FIStatusBadge, OrderTypeBadge, TierBadg
 import { useSubOrder } from '@/lib/hooks/useSubOrders'
 
 import { cn } from '@/lib/utils'
-import type { SubOrder, PreProdStage, FIRequest, ActivityLog, SampleRecord, SampleType, SampleStatus, VendorRFQ, VendorRFQStatus } from '@/lib/types'
+import type { SubOrder, PreProdStage, PreProdIteration, FIRequest, ActivityLog, SampleRecord, SampleType, SampleStatus, VendorRFQ, VendorRFQStatus } from '@/lib/types'
 import { vendors, subOrders as allSubOrders } from '@/lib/data'
 import { useVendorNotifications } from '@/lib/vendor-notifications'
+import { useCurrentUser } from '@/lib/user-context'
 
 // ─── Production Update Modal ─────────────────────────────────────────────────
 
@@ -880,114 +881,464 @@ function OverviewTab({ order, onUpdateProduction, onRequestFI, unlockBannerProps
 
 // ─── Tab: Pre-Production ──────────────────────────────────────────────────────
 
-// ─── PP stage definitions (canonical 7-stage checklist) ──────────────────────
-
-const PP_STAGE_DEFS: { name: string; abbr: string; type: 'approval' | 'tracking'; reviewer: string; gate: 'hard' | 'soft' }[] = [
-  { name: 'Lab Dip',                       abbr: 'LD',  type: 'approval',  reviewer: 'Designer',             gate: 'hard' },
-  { name: 'Strike Off',                     abbr: 'SO',  type: 'approval',  reviewer: 'Designer',             gate: 'soft' },
-  { name: 'Fit Sample',                     abbr: 'FS',  type: 'approval',  reviewer: 'Fit Technician',       gate: 'hard' },
-  { name: 'Fabric Inward (FD Status)',      abbr: 'FD',  type: 'tracking',  reviewer: 'POC',                  gate: 'hard' },
-  { name: 'PP Sample (4B / Commercial)',    abbr: 'PP',  type: 'approval',  reviewer: 'Designer + Fit Tech',  gate: 'soft' },
-  { name: 'GPT (Garment Processing Test)', abbr: 'GPT', type: 'tracking',  reviewer: 'POC',                  gate: 'soft' },
-  { name: 'PP Fit',                         abbr: 'PPF', type: 'approval',  reviewer: 'Fit Technician',       gate: 'soft' },
-]
-
-const PP_STATUS_STYLE: Record<string, { bg: string; text: string; border: string; dot: string }> = {
-  'approved':    { bg: 'bg-green-50',  text: 'text-green-700',  border: 'border-green-200', dot: 'bg-green-500'  },
-  'pending':     { bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-amber-200', dot: 'bg-amber-400'  },
-  'overdue':     { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200',   dot: 'bg-red-500'    },
-  'rejected':    { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200',   dot: 'bg-red-600'    },
-  'not-started': { bg: 'bg-slate-50',  text: 'text-slate-500',  border: 'border-slate-200', dot: 'bg-slate-300'  },
+const PP_ABBR: Record<string, string> = {
+  'lab-dip': 'LD', 'strike-off': 'SO', 'fit-sample': 'FS',
+  'fabric-inward': 'FD', 'pp-sample': 'PP', 'gpt': 'GPT', 'pp-fit': 'PPF',
 }
 
-function PreProdTab({ order }: { order: SubOrder }) {
-  const [stages, setStages] = useState<PreProdStage[]>(() => {
-    // Merge existing data with the 7 canonical stages (fill gaps with not-started)
-    return PP_STAGE_DEFS.map((def, i) => {
-      const existing = order.preProdStages.find(s => s.name === def.name)
-      return existing ?? {
-        id: `pp-default-${i}`,
-        name: def.name,
-        status: 'not-started' as const,
-        plannedDate: '',
-        actualDate: undefined,
-        approvedBy: undefined,
-        approverRole: def.reviewer,
-        remarks: undefined,
-      }
-    })
-  })
+const PP_REVIEWER_LABEL: Record<string, string> = {
+  'designer': 'Designer', 'fit-technician': 'Fit Technician', 'sourcing-poc': 'POC',
+}
 
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
-  const [editDraft, setEditDraft] = useState<Partial<PreProdStage>>({})
+const PP_STATUS_STYLE: Record<string, { bg: string; text: string; border: string }> = {
+  'approved':    { bg: 'bg-green-50',  text: 'text-green-700',  border: 'border-green-200' },
+  'pending':     { bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-amber-200' },
+  'overdue':     { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200'   },
+  'rejected':    { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200'   },
+  'not-started': { bg: 'bg-slate-50',  text: 'text-slate-400',  border: 'border-slate-200' },
+}
 
-  const approved = stages.filter(s => s.status === 'approved').length
-  const total = stages.length
-  const allApproved = approved === total
-  const pct = Math.round((approved / total) * 100)
+const REJECTION_TAGS: Record<string, string[]> = {
+  'lab-dip':      ['shade-too-dark','shade-too-light','contrast-off','print-misaligned','hand-feel'],
+  'strike-off':   ['shade-too-dark','shade-too-light','contrast-off','print-misaligned','pattern-repeat-wrong'],
+  'fit-sample':   ['chest-too-tight','chest-too-loose','waist-off','length-too-short','length-too-long','sleeve-off','construction-issue'],
+  'fabric-inward':['delayed','quantity-short','colorfastness-fail','shrinkage-out-of-spec'],
+  'pp-sample':    ['colour-off','print-placement-wrong','distortion','finishing-poor','seam-issue'],
+  'gpt':          ['colorfastness-fail','shrinkage-out-of-spec','pilling'],
+  'pp-fit':       ['chest-too-tight','chest-too-loose','waist-off','length-too-short','length-too-long','silhouette-wrong','measurement-out-of-spec'],
+}
 
-  function openEdit(idx: number) {
-    setExpandedIdx(expandedIdx === idx ? null : idx)
-    setEditDraft({ ...stages[idx] })
+const TAG_LABELS: Record<string,string> = {
+  'shade-too-dark':'Shade too dark','shade-too-light':'Shade too light','contrast-off':'Contrast off',
+  'print-misaligned':'Print misaligned','hand-feel':'Hand feel','pattern-repeat-wrong':'Pattern repeat wrong',
+  'chest-too-tight':'Chest too tight','chest-too-loose':'Chest too loose','waist-off':'Waist off',
+  'length-too-short':'Length too short','length-too-long':'Length too long','sleeve-off':'Sleeve off',
+  'construction-issue':'Construction issue','silhouette-wrong':'Silhouette wrong','measurement-out-of-spec':'Measurement out of spec',
+  'colour-off':'Colour off','print-placement-wrong':'Print placement wrong','distortion':'Distortion',
+  'finishing-poor':'Finishing poor','seam-issue':'Seam issue','delayed':'Delayed',
+  'quantity-short':'Quantity short','colorfastness-fail':'Colorfastness fail','shrinkage-out-of-spec':'Shrinkage out of spec','pilling':'Pilling',
+}
+
+const DEMO_REVIEWERS = {
+  designer:    [{ id: 'u10', name: 'Subashree Nair' }, { id: 'ext-d1', name: 'Priya M' }],
+  'fit-technician': [{ id: 'u11', name: 'Meera Pillai' }, { id: 'ext-f1', name: 'Rahul K' }],
+}
+
+// ─── Production Gate Banner ───────────────────────────────────────────────────
+
+function ProductionGateBanner({ order, allOrders, onUnlock, onReplenSkip }: {
+  order: SubOrder
+  allOrders: SubOrder[]
+  onUnlock: (reason: string) => void
+  onReplenSkip: () => void
+}) {
+  const { currentUser } = useCurrentUser()
+  const [showUnlockModal, setShowUnlockModal] = useState(false)
+  const [unlockReason, setUnlockReason] = useState('')
+  const canUnlock = ['sourcing-poc','sourcing-mgr','sourcing-director'].includes(currentUser.role)
+
+  const allApproved = order.preProdStages.length === 7 && order.preProdStages.every(s => s.status === 'approved')
+
+  // REPLEN skip suggestion
+  const hasPriorApprovedRun = order.orderType === 'REPLEN' && allOrders.some(o =>
+    o.id !== order.id &&
+    o.styleCode === order.styleCode &&
+    o.vendor.id === order.vendor.id &&
+    o.preProdStages.length === 7 &&
+    o.preProdStages.every(s => s.status === 'approved')
+  )
+
+  if (order.preprodSkippedForReplen) {
+    return (
+      <div className="flex items-start gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3">
+        <Info className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-slate-500">
+          Production gate skipped — replenishment order with previously approved pre-prod
+          {order.preprodSkipConfirmedBy && <span className="font-medium"> (confirmed by {order.preprodSkipConfirmedBy})</span>}.
+        </p>
+      </div>
+    )
   }
 
-  function saveStage(idx: number) {
-    setStages(prev => prev.map((s, i) => i === idx ? { ...s, ...editDraft } as PreProdStage : s))
-    setExpandedIdx(null)
-  }
-
-  function quickAction(idx: number, action: 'approve' | 'reject' | 'pending') {
-    setStages(prev => prev.map((s, i) => {
-      if (i !== idx) return s
-      if (action === 'approve') return { ...s, status: 'approved', actualDate: new Date().toISOString().split('T')[0] }
-      if (action === 'reject')  return { ...s, status: 'rejected' }
-      return { ...s, status: 'pending' }
-    }))
+  if (allApproved || order.productionUnlocked) {
+    return (
+      <div className="flex items-start gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
+        <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-green-800 font-semibold">
+            {allApproved ? 'All pre-prod stages cleared — production gate open.' : `Production unlocked early by ${order.productionUnlockedBy}.`}
+          </p>
+          {order.productionUnlocked && !allApproved && order.productionUnlockReason && (
+            <p className="text-xs text-green-700 mt-0.5">Reason: {order.productionUnlockReason}</p>
+          )}
+        </div>
+        {order.productionUnlocked && !allApproved && canUnlock && (
+          <button onClick={() => onUnlock('')} className="text-xs text-green-700 font-medium border border-green-300 rounded-lg px-2.5 py-1 hover:bg-green-100 transition-colors flex-shrink-0">
+            Re-lock
+          </button>
+        )}
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-4">
+    <>
+      {hasPriorApprovedRun && (
+        <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-3 mb-2">
+          <Info className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-blue-800 font-semibold">Replenishment with same vendor — production gate is skippable.</p>
+            <p className="text-xs text-blue-700 mt-0.5">A prior approved pre-prod run exists for this style + vendor combination.</p>
+          </div>
+          {canUnlock && (
+            <button onClick={onReplenSkip} className="text-xs text-blue-700 font-semibold border border-blue-300 rounded-lg px-2.5 py-1 hover:bg-blue-100 transition-colors flex-shrink-0">
+              Confirm Skip
+            </button>
+          )}
+        </div>
+      )}
+      <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-3">
+        <Lock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-amber-800 font-semibold">
+            Production is locked — {order.preProdStages.filter(s => s.status === 'approved').length} of 7 stages approved.
+          </p>
+          <p className="text-xs text-amber-700 mt-0.5">All stages must be approved before production tracking can begin.</p>
+        </div>
+        {canUnlock && (
+          <button onClick={() => setShowUnlockModal(true)} className="text-xs text-amber-700 font-semibold border border-amber-300 rounded-lg px-2.5 py-1 hover:bg-amber-100 transition-colors flex-shrink-0">
+            Unlock Production
+          </button>
+        )}
+      </div>
 
-      {/* ── Unlocked-early pill ──────────────────────────────────────────────── */}
+      {showUnlockModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <h2 className="text-sm font-semibold text-slate-900 mb-1">Unlock production early</h2>
+            <p className="text-xs text-slate-500 mb-4">Pre-prod stages are not yet complete. Please provide a reason.</p>
+            <textarea
+              value={unlockReason}
+              onChange={e => setUnlockReason(e.target.value)}
+              rows={3}
+              placeholder="e.g. Timeline critical — vendor given go-ahead with risk acknowledged"
+              className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none mb-4"
+            />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowUnlockModal(false)} className="px-4 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 font-medium">Cancel</button>
+              <button
+                onClick={() => { if (unlockReason.trim()) { onUnlock(unlockReason.trim()); setShowUnlockModal(false) } }}
+                disabled={!unlockReason.trim()}
+                className="px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold disabled:opacity-40 hover:bg-amber-600 transition-colors"
+              >
+                Unlock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── Mark Submitted Modal ─────────────────────────────────────────────────────
+
+function MarkSubmittedModal({ stageName, onConfirm, onClose }: {
+  stageName: string
+  onConfirm: (notes: string) => void
+  onClose: () => void
+}) {
+  const [notes, setNotes] = useState('')
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-900">Mark {stageName} as submitted</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
+        </div>
+        <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 flex items-center gap-3 mb-4 bg-slate-50 cursor-pointer hover:border-violet-300 transition-colors">
+          <Upload className="w-4 h-4 text-slate-400" />
+          <div>
+            <p className="text-xs font-medium text-slate-600">Attach sample photos (optional)</p>
+            <p className="text-[10px] text-slate-400">JPG, PNG · up to 3 photos · 5 MB each</p>
+          </div>
+        </div>
+        <textarea
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          rows={2}
+          placeholder="Optional submission notes…"
+          className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none mb-4"
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 font-medium">Cancel</button>
+          <button onClick={() => onConfirm(notes)} className="px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-semibold hover:bg-amber-600 transition-colors">
+            Mark Submitted
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Approve Modal ────────────────────────────────────────────────────────────
+
+function ApproveModal({ stageName, reviewerRole, isPoc, onConfirm, onClose }: {
+  stageName: string
+  reviewerRole: 'designer' | 'fit-technician' | 'sourcing-poc'
+  isPoc: boolean
+  onConfirm: (notes: string, onBehalfOfId?: string, onBehalfOfName?: string) => void
+  onClose: () => void
+}) {
+  const [notes, setNotes] = useState('')
+  const [onBehalf, setOnBehalf] = useState('')
+  const reviewers = isPoc && reviewerRole !== 'sourcing-poc'
+    ? (DEMO_REVIEWERS[reviewerRole as keyof typeof DEMO_REVIEWERS] ?? [])
+    : []
+  const selected = reviewers.find(r => r.id === onBehalf)
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-900">Approve {stageName}</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
+        </div>
+        {reviewers.length > 0 && (
+          <div className="mb-3">
+            <label className="text-xs font-semibold text-slate-600 block mb-1">Recording on behalf of</label>
+            <select value={onBehalf} onChange={e => setOnBehalf(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-400">
+              <option value="">— My own approval —</option>
+              {reviewers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+        )}
+        <textarea
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          rows={2}
+          placeholder="Optional approval notes…"
+          className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-green-400 resize-none mb-4"
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 font-medium">Cancel</button>
+          <button onClick={() => onConfirm(notes, selected?.id, selected?.name)}
+            className="px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-semibold hover:bg-green-700 transition-colors flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Confirm Approval
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Reject Modal ─────────────────────────────────────────────────────────────
+
+function RejectModal({ stageName, stageKey, reviewerRole, isPoc, onConfirm, onClose }: {
+  stageName: string
+  stageKey: string
+  reviewerRole: 'designer' | 'fit-technician' | 'sourcing-poc'
+  isPoc: boolean
+  onConfirm: (notes: string, tags: string[], onBehalfOfId?: string, onBehalfOfName?: string) => void
+  onClose: () => void
+}) {
+  const [notes, setNotes] = useState('')
+  const [tags, setTags] = useState<string[]>([])
+  const [onBehalf, setOnBehalf] = useState('')
+  const vocab = REJECTION_TAGS[stageKey] ?? []
+  const reviewers = isPoc && reviewerRole !== 'sourcing-poc'
+    ? (DEMO_REVIEWERS[reviewerRole as keyof typeof DEMO_REVIEWERS] ?? [])
+    : []
+  const selected = reviewers.find(r => r.id === onBehalf)
+  const toggleTag = (t: string) => setTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-900">Reject {stageName}</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
+        </div>
+        {reviewers.length > 0 && (
+          <div className="mb-3">
+            <label className="text-xs font-semibold text-slate-600 block mb-1">Recording on behalf of</label>
+            <select value={onBehalf} onChange={e => setOnBehalf(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-red-400">
+              <option value="">— My own rejection —</option>
+              {reviewers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+        )}
+        {vocab.length > 0 && (
+          <div className="mb-3">
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Rejection tags <span className="font-normal text-slate-400">(optional)</span></label>
+            <div className="flex flex-wrap gap-1.5">
+              {vocab.map(t => (
+                <button key={t} onClick={() => toggleTag(t)}
+                  className={cn('text-[10px] px-2 py-1 rounded-full border font-medium transition-colors',
+                    tags.includes(t) ? 'bg-red-100 border-red-300 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-red-200')}>
+                  {TAG_LABELS[t] ?? t}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mb-4">
+          <label className="text-xs font-semibold text-slate-600 block mb-1">Rejection notes <span className="text-red-500">*</span></label>
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            placeholder="Describe the issue clearly so the vendor knows what to fix…"
+            className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+          />
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 border border-slate-200 rounded-xl text-xs text-slate-600 font-medium">Cancel</button>
+          <button
+            onClick={() => { if (notes.trim().length >= 10) onConfirm(notes.trim(), tags, selected?.id, selected?.name) }}
+            disabled={notes.trim().length < 10}
+            className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold disabled:opacity-40 hover:bg-red-700 transition-colors"
+          >
+            Confirm Rejection
+          </button>
+        </div>
+        {notes.trim().length > 0 && notes.trim().length < 10 && (
+          <p className="text-[10px] text-red-500 mt-1 text-right">Notes must be at least 10 characters</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── PreProdTab ───────────────────────────────────────────────────────────────
+
+function PreProdTab({ order }: { order: SubOrder }) {
+  const { currentUser } = useCurrentUser()
+  const [stages, setStages] = useState<PreProdStage[]>(() => order.preProdStages)
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const [modal, setModal] = useState<{ type: 'submit'|'approve'|'reject'; idx: number } | null>(null)
+  const [prodUnlocked, setProdUnlocked] = useState(order.productionUnlocked ?? false)
+  const [prodUnlockReason, setProdUnlockReason] = useState(order.productionUnlockReason ?? '')
+  const [prodUnlockedBy, setProdUnlockedBy] = useState(order.productionUnlockedBy ?? '')
+  const [replenSkipped, setReplenSkipped] = useState(order.preprodSkippedForReplen ?? false)
+
+  const today = new Date().toISOString().split('T')[0]
+  const approved = stages.filter(s => s.status === 'approved').length
+  const pct = Math.round((approved / 7) * 100)
+  const allApproved = approved === 7
+
+  const role = currentUser.role
+  const isPoc = ['sourcing-poc','sourcing-mgr','sourcing-director'].includes(role)
+  const isDesigner = role === 'designer'
+  const isFitTech = role === 'fit-technician'
+
+  function deriveStatus(stage: PreProdStage): PreProdStage['status'] {
+    const s = stage.currentIteration?.status
+    if (!s) return 'not-started'
+    if (s === 'approved') return 'approved'
+    if (s === 'rejected') return 'rejected'
+    if (stage.plannedDate && stage.plannedDate < today) return 'overdue'
+    return 'pending'
+  }
+
+  function handleSubmit(idx: number, notes: string) {
+    setStages(prev => prev.map((s, i) => {
+      if (i !== idx) return s
+      const iterNum = (s.pastIterations.length) + 1
+      const newIter: PreProdIteration = {
+        id: `iter-${iterNum}-${today}`, iterationNumber: iterNum,
+        submittedAt: today, submittedById: currentUser.id, submittedByName: currentUser.name,
+        photos: [], status: 'pending', approvalNotes: notes || undefined,
+      }
+      const past = s.currentIteration ? [...s.pastIterations, { ...s.currentIteration, status: 'rejected' as const }] : s.pastIterations
+      return { ...s, currentIteration: newIter, pastIterations: past, status: 'pending' }
+    }))
+    setModal(null)
+  }
+
+  function handleApprove(idx: number, notes: string, onBehalfOfId?: string, onBehalfOfName?: string) {
+    setStages(prev => prev.map((s, i) => {
+      if (i !== idx || !s.currentIteration) return s
+      const iter: PreProdIteration = {
+        ...s.currentIteration, status: 'approved',
+        reviewedById: onBehalfOfId ?? currentUser.id,
+        reviewerName: onBehalfOfName ?? currentUser.name,
+        reviewerRole: onBehalfOfName ? s.reviewerRole : role,
+        reviewedAt: today, approvalNotes: notes || undefined,
+        recordedByPocId: onBehalfOfId ? currentUser.id : undefined,
+        recordedByPocName: onBehalfOfId ? currentUser.name : undefined,
+      }
+      return { ...s, currentIteration: iter, status: 'approved' }
+    }))
+    setModal(null)
+  }
+
+  function handleReject(idx: number, notes: string, tags: string[], onBehalfOfId?: string, onBehalfOfName?: string) {
+    setStages(prev => prev.map((s, i) => {
+      if (i !== idx || !s.currentIteration) return s
+      const iter: PreProdIteration = {
+        ...s.currentIteration, status: 'rejected',
+        reviewedById: onBehalfOfId ?? currentUser.id,
+        reviewerName: onBehalfOfName ?? currentUser.name,
+        reviewerRole: onBehalfOfName ? s.reviewerRole : role,
+        reviewedAt: today, rejectionNotes: notes, rejectionTags: tags,
+        recordedByPocId: onBehalfOfId ? currentUser.id : undefined,
+        recordedByPocName: onBehalfOfId ? currentUser.name : undefined,
+      }
+      return { ...s, currentIteration: iter, status: 'rejected' }
+    }))
+    setModal(null)
+  }
+
+  const activeStage = stages[modal?.idx ?? -1]
+
+  return (
+    <div className="space-y-3">
+
+      {/* ── Pre-prod early unlock pill ───────────────────────────────────────── */}
       {order.preProdUnlocked && order.costStatus !== 'approved' && (
         <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
           <Zap className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
           <p className="text-xs text-amber-800 font-medium">
-            Unlocked early — costing not yet approved. Stages are accessible but vendor proceeds at their own risk.
+            Unlocked early — costing not yet approved. Stages accessible but vendor proceeds at their own risk.
           </p>
         </div>
       )}
 
-      {/* ── Progress header ─────────────────────────────────────────────────── */}
+      {/* ── Production gate banner ───────────────────────────────────────────── */}
+      <ProductionGateBanner
+        order={{ ...order, productionUnlocked: prodUnlocked, productionUnlockReason: prodUnlockReason, productionUnlockedBy: prodUnlockedBy, preprodSkippedForReplen: replenSkipped, preProdStages: stages }}
+        allOrders={allSubOrders}
+        onUnlock={(reason) => {
+          if (reason === '') { setProdUnlocked(false); setProdUnlockReason(''); setProdUnlockedBy('') }
+          else { setProdUnlocked(true); setProdUnlockReason(reason); setProdUnlockedBy(currentUser.name) }
+        }}
+        onReplenSkip={() => setReplenSkipped(true)}
+      />
+
+      {/* ── Progress header ──────────────────────────────────────────────────── */}
       <div className={cn('rounded-xl border p-4', allApproved ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200')}>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            {allApproved
-              ? <CheckCircle2 className="w-4 h-4 text-green-600" />
-              : <Clock className="w-4 h-4 text-amber-500" />
-            }
+            {allApproved ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Clock className="w-4 h-4 text-amber-500" />}
             <span className={cn('text-sm font-semibold', allApproved ? 'text-green-800' : 'text-slate-800')}>
-              {allApproved ? 'All stages approved — production gate cleared' : `${approved} of ${total} stages approved`}
+              {allApproved ? 'All stages approved — production gate cleared' : `${approved} of 7 stages approved`}
             </span>
           </div>
           <span className={cn('text-sm font-bold', allApproved ? 'text-green-700' : 'text-violet-700')}>{pct}%</span>
         </div>
-        {/* Progress bar */}
         <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-          <div
-            className={cn('h-full rounded-full transition-all duration-500', allApproved ? 'bg-green-500' : 'bg-violet-500')}
-            style={{ width: `${pct}%` }}
-          />
+          <div className={cn('h-full rounded-full transition-all duration-500', allApproved ? 'bg-green-500' : 'bg-violet-500')} style={{ width: `${pct}%` }} />
         </div>
-        {/* Stage dots */}
-        <div className="flex items-center gap-1 mt-3">
+        <div className="flex items-center gap-1 mt-3 flex-wrap">
           {stages.map((s, i) => {
-            const def = PP_STAGE_DEFS[i]
-            const style = PP_STATUS_STYLE[s.status] ?? PP_STATUS_STYLE['not-started']
+            const derived = deriveStatus(s)
+            const sty = PP_STATUS_STYLE[derived]
+            const abbr = PP_ABBR[s.stageKey] ?? String(i + 1)
             return (
-              <div key={i} title={`${def.name}: ${s.status}`}
-                className={cn('flex items-center justify-center rounded-full text-[9px] font-bold border w-7 h-7 flex-shrink-0', style.bg, style.text, style.border)}>
-                {s.status === 'approved' ? '✓' : def.abbr}
+              <div key={s.id} title={`${s.name}: ${derived}`}
+                className={cn('flex items-center justify-center rounded-full text-[9px] font-bold border w-7 h-7 flex-shrink-0', sty.bg, sty.text, sty.border)}>
+                {derived === 'approved' ? '✓' : abbr}
               </div>
             )
           })}
@@ -997,167 +1348,168 @@ function PreProdTab({ order }: { order: SubOrder }) {
       {/* ── Stage cards ─────────────────────────────────────────────────────── */}
       <div className="space-y-2">
         {stages.map((stage, idx) => {
-          const def = PP_STAGE_DEFS[idx]
-          const style = PP_STATUS_STYLE[stage.status] ?? PP_STATUS_STYLE['not-started']
+          const derived = deriveStatus(stage)
+          const sty = PP_STATUS_STYLE[derived]
           const isExpanded = expandedIdx === idx
-          const isActionable = stage.status !== 'approved'
-          const today = new Date().toISOString().split('T')[0]
-          const isOverdue = stage.plannedDate && stage.plannedDate < today && stage.status !== 'approved'
+          const iter = stage.currentIteration
+          const roundNum = (stage.pastIterations.length ?? 0) + (iter ? 1 : 0)
+          const isOverdueFlag = derived === 'overdue'
+          const reviewerLabel = PP_REVIEWER_LABEL[stage.reviewerRole] ?? stage.reviewerRole
+
+          // Who can act on this stage?
+          const canReview = (
+            (stage.reviewerRole === 'designer' && isDesigner) ||
+            (stage.reviewerRole === 'fit-technician' && isFitTech) ||
+            (stage.reviewerRole === 'sourcing-poc' && isPoc) ||
+            isPoc // POC can record on behalf
+          )
+          const canSubmit = isPoc
+          const isSubmittable = derived === 'not-started' || derived === 'rejected'
+          const isApprovable = derived === 'pending' || derived === 'overdue'
 
           return (
-            <div key={stage.id} className={cn('rounded-xl border overflow-hidden transition-all', style.border, isExpanded ? style.bg : 'bg-white')}>
-              {/* Card row */}
-              <div
-                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50/80 transition-colors"
-                onClick={() => openEdit(idx)}
-              >
-                {/* Status dot / number */}
-                <div className={cn('w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border text-xs font-bold', style.bg, style.text, style.border)}>
-                  {stage.status === 'approved' ? <CheckCircle2 className="w-4 h-4" /> : <span>{idx + 1}</span>}
+            <div key={stage.id} className={cn('rounded-xl border overflow-hidden transition-all', sty.border, isExpanded ? sty.bg : 'bg-white')}>
+              {/* ── Card header row ── */}
+              <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50/60 transition-colors" onClick={() => setExpandedIdx(isExpanded ? null : idx)}>
+                <div className={cn('w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 border text-xs font-bold', sty.bg, sty.text, sty.border)}>
+                  {derived === 'approved' ? <CheckCircle2 className="w-4 h-4" /> : <span>{idx + 1}</span>}
                 </div>
-
-                {/* Name + meta */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-slate-900">{stage.name}</span>
-                    {/* Type badge */}
-                    <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium',
-                      def.type === 'approval' ? 'bg-violet-100 text-violet-600' : 'bg-blue-100 text-blue-600'
-                    )}>
-                      {def.type === 'approval' ? 'Approval' : 'Tracking'}
+                    {roundNum > 1 && (
+                      <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded-full font-semibold">Round {roundNum}</span>
+                    )}
+                    <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', stage.gate === 'hard' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500')}>
+                      {stage.gate === 'hard' ? 'Hard gate' : 'Soft gate'}
                     </span>
-                    {/* Gate badge */}
-                    <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium',
-                      def.gate === 'hard' ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'
-                    )}>
-                      {def.gate === 'hard' ? 'Hard gate' : 'Soft gate'}
-                    </span>
-                    {isOverdue && (
+                    {isOverdueFlag && (
                       <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5">
                         <AlertTriangle className="w-2.5 h-2.5" /> Overdue
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-400">
-                    <span>Reviewer: <span className="text-slate-600">{def.reviewer}</span></span>
-                    {stage.plannedDate && <span>Planned: <span className="text-slate-600">{fmtD(stage.plannedDate)}</span></span>}
-                    {stage.actualDate  && <span>Actual: <span className="text-green-600 font-medium">{fmtD(stage.actualDate)}</span></span>}
+                    <span>Reviewer: <span className="text-slate-600">{reviewerLabel}</span></span>
+                    {stage.plannedDate && <span>Plan: <span className="text-slate-600">{fmtD(stage.plannedDate)}</span></span>}
+                    {derived === 'approved' && iter?.reviewedAt && <span className="text-green-600 font-medium">✓ {fmtD(iter.reviewedAt)}</span>}
                   </div>
                 </div>
-
-                {/* Status badge + quick actions */}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className={cn('text-xs px-2.5 py-1 rounded-full font-medium border capitalize', style.bg, style.text, style.border)}>
-                    {stage.status.replace('-', ' ')}
+                  <span className={cn('text-xs px-2.5 py-1 rounded-full font-medium border capitalize', sty.bg, sty.text, sty.border)}>
+                    {derived.replace('-', ' ')}
                   </span>
-                  {stage.status === 'approved' && stage.approvedBy && (
-                    <span className="text-xs text-slate-400 hidden sm:inline">{stage.approvedBy}</span>
+                  {derived === 'approved' && iter?.reviewerName && (
+                    <span className="text-xs text-slate-400 hidden sm:inline">{iter.reviewerName}</span>
                   )}
                   <ChevronDown className={cn('w-4 h-4 text-slate-400 transition-transform', isExpanded && 'rotate-180')} />
                 </div>
               </div>
 
-              {/* Expanded edit panel */}
+              {/* ── Expanded panel ── */}
               {isExpanded && (
-                <div className="border-t border-slate-100 px-4 py-4 space-y-4 bg-white">
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Status selector */}
-                    <div>
-                      <label className="text-xs font-semibold text-slate-600 block mb-1">Status</label>
-                      <select
-                        value={editDraft.status ?? stage.status}
-                        onChange={e => setEditDraft(d => ({ ...d, status: e.target.value as PreProdStage['status'] }))}
-                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400"
-                      >
-                        <option value="not-started">Not Started</option>
-                        <option value="pending">Pending / Submitted</option>
-                        <option value="approved">Approved</option>
-                        <option value="rejected">Rejected</option>
-                        <option value="overdue">Overdue</option>
-                      </select>
-                    </div>
+                <div className="border-t border-slate-100 bg-white">
+                  {/* Current iteration details */}
+                  {iter && (
+                    <div className="px-4 py-3 space-y-3">
+                      <div className="flex items-start gap-3">
+                        {iter.photos && iter.photos.length > 0 && (
+                          <div className="flex gap-2 flex-shrink-0">
+                            {iter.photos.slice(0, 3).map((url, pi) => (
+                              <img key={pi} src={url} alt={`Photo ${pi+1}`} className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-slate-500">
+                            Submitted {fmtD(iter.submittedAt)} by {iter.submittedByName}
+                            {iter.iterationNumber > 1 && <span className="ml-1 text-orange-600 font-medium">· Round {iter.iterationNumber}</span>}
+                          </p>
+                          {iter.status === 'approved' && iter.reviewerName && (
+                            <p className="text-xs text-green-700 font-medium mt-1">
+                              ✓ Approved by {iter.reviewerName}
+                              {iter.recordedByPocName && <span className="text-slate-400 font-normal"> (recorded by {iter.recordedByPocName})</span>}
+                            </p>
+                          )}
+                          {iter.status === 'rejected' && (
+                            <div className="mt-1">
+                              <p className="text-xs text-red-700 font-medium">✗ Rejected by {iter.reviewerName ?? '—'}</p>
+                              {iter.rejectionTags && iter.rejectionTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {iter.rejectionTags.map(t => (
+                                    <span key={t} className="text-[10px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded-full">{TAG_LABELS[t] ?? t}</span>
+                                  ))}
+                                </div>
+                              )}
+                              {iter.rejectionNotes && <p className="text-xs text-red-600 mt-1 italic">"{iter.rejectionNotes}"</p>}
+                            </div>
+                          )}
+                          {iter.approvalNotes && <p className="text-xs text-slate-500 mt-1 italic">Note: {iter.approvalNotes}</p>}
+                        </div>
+                      </div>
 
-                    {/* Planned date */}
-                    <div>
-                      <label className="text-xs font-semibold text-slate-600 block mb-1">Planned Date</label>
-                      <input type="date"
-                        value={editDraft.plannedDate ?? stage.plannedDate}
-                        onChange={e => setEditDraft(d => ({ ...d, plannedDate: e.target.value }))}
-                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                    </div>
-
-                    {/* Actual date */}
-                    <div>
-                      <label className="text-xs font-semibold text-slate-600 block mb-1">Actual / Completion Date</label>
-                      <input type="date"
-                        value={editDraft.actualDate ?? stage.actualDate ?? ''}
-                        onChange={e => setEditDraft(d => ({ ...d, actualDate: e.target.value }))}
-                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                    </div>
-
-                    {/* Approved by */}
-                    <div>
-                      <label className="text-xs font-semibold text-slate-600 block mb-1">Approved / Reviewed By</label>
-                      <input
-                        value={editDraft.approvedBy ?? stage.approvedBy ?? ''}
-                        onChange={e => setEditDraft(d => ({ ...d, approvedBy: e.target.value }))}
-                        placeholder={def.reviewer}
-                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                    </div>
-                  </div>
-
-                  {/* Remarks */}
-                  <div>
-                    <label className="text-xs font-semibold text-slate-600 block mb-1">Remarks / Notes</label>
-                    <textarea
-                      value={editDraft.remarks ?? stage.remarks ?? ''}
-                      onChange={e => setEditDraft(d => ({ ...d, remarks: e.target.value }))}
-                      rows={2}
-                      placeholder="Any notes, revision comments, colour remarks, test results…"
-                      className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
-                    />
-                  </div>
-
-                  {/* Photo upload placeholder */}
-                  <div className="border border-dashed border-slate-300 rounded-xl px-4 py-3 flex items-center gap-3 bg-slate-50 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors">
-                    <Upload className="w-4 h-4 text-slate-400" />
-                    <div>
-                      <p className="text-xs font-medium text-slate-600">Upload sample photo / report</p>
-                      <p className="text-[10px] text-slate-400">JPG, PNG, PDF up to 10 MB</p>
-                    </div>
-                    {stage.photoUrl && <span className="ml-auto text-xs text-violet-600 font-medium">1 file attached</span>}
-                  </div>
-
-                  {/* Action buttons */}
-                  <div className="flex gap-2 pt-1">
-                    <button onClick={() => setExpandedIdx(null)}
-                      className="px-4 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 font-medium hover:bg-slate-50 transition-colors">
-                      Cancel
-                    </button>
-                    <div className="flex-1" />
-                    {isActionable && (
-                      <>
-                        <button onClick={() => { quickAction(idx, 'reject'); setExpandedIdx(null) }}
-                          className="px-4 py-2 border border-red-200 text-red-600 rounded-lg text-xs font-semibold hover:bg-red-50 transition-colors">
-                          Reject
-                        </button>
-                        {stage.status !== 'pending' && (
-                          <button onClick={() => { quickAction(idx, 'pending'); setExpandedIdx(null) }}
-                            className="px-4 py-2 border border-amber-200 text-amber-700 rounded-lg text-xs font-semibold hover:bg-amber-50 transition-colors">
+                      {/* Action buttons */}
+                      <div className="flex gap-2">
+                        {canSubmit && isSubmittable && (
+                          <button onClick={() => setModal({ type: 'submit', idx })}
+                            className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors">
+                            {iter.iterationNumber > 1 ? `Start Round ${iter.iterationNumber + 1}` : 'Mark Submitted'}
+                          </button>
+                        )}
+                        {canReview && isApprovable && (
+                          <>
+                            <button onClick={() => setModal({ type: 'approve', idx })}
+                              className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700 transition-colors flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" /> Approve
+                            </button>
+                            <button onClick={() => setModal({ type: 'reject', idx })}
+                              className="px-3 py-1.5 border border-red-200 text-red-600 rounded-lg text-xs font-semibold hover:bg-red-50 transition-colors">
+                              Reject
+                            </button>
+                          </>
+                        )}
+                        {canSubmit && derived === 'not-started' && !iter && (
+                          <button onClick={() => setModal({ type: 'submit', idx })}
+                            className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors">
                             Mark Submitted
                           </button>
                         )}
-                        <button onClick={() => { quickAction(idx, 'approve'); setExpandedIdx(null) }}
-                          className="px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700 transition-colors flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No iteration yet */}
+                  {!iter && (
+                    <div className="px-4 py-3 flex items-center gap-3">
+                      <p className="text-xs text-slate-400 flex-1">Not yet submitted.</p>
+                      {canSubmit && (
+                        <button onClick={() => setModal({ type: 'submit', idx })}
+                          className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors">
+                          Mark Submitted
                         </button>
-                      </>
-                    )}
-                    <button onClick={() => saveStage(idx)}
-                      className="px-4 py-2 bg-violet-600 text-white rounded-lg text-xs font-semibold hover:bg-violet-700 transition-colors">
-                      Save Changes
-                    </button>
-                  </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Past iterations */}
+                  {stage.pastIterations.length > 0 && (
+                    <div className="border-t border-slate-100 px-4 py-3">
+                      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Previous rounds</p>
+                      <div className="space-y-2">
+                        {stage.pastIterations.map((pi) => (
+                          <div key={pi.id} className="bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                            <p className="text-xs font-medium text-red-700">Round {pi.iterationNumber} — Rejected {pi.reviewedAt ? fmtD(pi.reviewedAt) : ''} by {pi.reviewerName ?? '—'}</p>
+                            {pi.rejectionTags && pi.rejectionTags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {pi.rejectionTags.map(t => <span key={t} className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">{TAG_LABELS[t] ?? t}</span>)}
+                              </div>
+                            )}
+                            {pi.rejectionNotes && <p className="text-xs text-red-600 mt-0.5 italic">"{pi.rejectionNotes}"</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1166,10 +1518,24 @@ function PreProdTab({ order }: { order: SubOrder }) {
       </div>
 
       {/* ── Gate legend ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-4 text-xs text-slate-400 px-1">
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" /> Hard gate — production blocked until approved</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-300 inline-block" /> Soft gate — production can proceed with warning</span>
+      <div className="flex items-center gap-4 text-xs text-slate-400 px-1 flex-wrap">
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" /> Hard gate</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-300 inline-block" /> Soft gate</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Round N — rejection history exists</span>
       </div>
+
+      {/* ── Modals ──────────────────────────────────────────────────────────── */}
+      {modal?.type === 'submit' && activeStage && (
+        <MarkSubmittedModal stageName={activeStage.name} onConfirm={(n) => handleSubmit(modal.idx, n)} onClose={() => setModal(null)} />
+      )}
+      {modal?.type === 'approve' && activeStage && (
+        <ApproveModal stageName={activeStage.name} reviewerRole={activeStage.reviewerRole} isPoc={isPoc}
+          onConfirm={(n, id, name) => handleApprove(modal.idx, n, id, name)} onClose={() => setModal(null)} />
+      )}
+      {modal?.type === 'reject' && activeStage && (
+        <RejectModal stageName={activeStage.name} stageKey={activeStage.stageKey} reviewerRole={activeStage.reviewerRole} isPoc={isPoc}
+          onConfirm={(n, t, id, name) => handleReject(modal.idx, n, t, id, name)} onClose={() => setModal(null)} />
+      )}
     </div>
   )
 }

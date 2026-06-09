@@ -18,7 +18,7 @@ import { useUsers } from '@/lib/hooks/useUsers'
 import { apiOrderToSubOrder } from '@/lib/api/adapters'
 import type { ApiVendor } from '@/lib/api/vendors'
 import { cn } from '@/lib/utils'
-import type { SubOrder, SubOrderStatus } from '@/lib/types'
+import type { SubOrder, SubOrderStatus, PreProdStage } from '@/lib/types'
 import { subOrders as mockSubOrders } from '@/lib/data'
 import { useCurrentUser } from '@/lib/user-context'
 import { type OpenCostingBreakdown, deriveOpenCostingTotals } from '@/lib/vendor-costing'
@@ -201,10 +201,10 @@ function PreProdModal({ order, onClose }: { order: SubOrder; onClose: () => void
         type:         meta.type,
         status:       (existing?.status ?? 'not-started') as PPStageLocal['status'],
         plannedDate:  existing?.plannedDate ?? '',
-        actualDate:   existing?.actualDate,
-        approvedBy:   existing?.approvedBy,
-        approverRole: existing?.approverRole ?? meta.role,
-        remarks:      existing?.remarks,
+        actualDate:   existing?.currentIteration?.reviewedAt,
+        approvedBy:   existing?.currentIteration?.reviewerName,
+        approverRole: meta.role,
+        remarks:      existing?.currentIteration?.approvalNotes,
       }
     })
   )
@@ -7595,6 +7595,204 @@ function StageQuickModal({
 
 // ─── Sampling View ────────────────────────────────────────────────────────────
 
+// ─── Portfolio: Pre-Production Health View ────────────────────────────────────
+
+const PP_ABBR_PORT: Record<string, string> = {
+  'lab-dip':'LD','strike-off':'SO','fit-sample':'FS',
+  'fabric-inward':'FD','pp-sample':'PP','gpt':'GPT','pp-fit':'PPF',
+}
+const PP_STATUS_DOT: Record<string, { bg: string; border: string; text: string }> = {
+  'approved':    { bg: '#D1FAE5', border: '#6EE7B7', text: '#065F46' },
+  'pending':     { bg: '#FEF3C7', border: '#FDE68A', text: '#92400E' },
+  'overdue':     { bg: '#FEE2E2', border: '#FCA5A5', text: '#991B1B' },
+  'rejected':    { bg: '#FEE2E2', border: '#FCA5A5', text: '#991B1B' },
+  'not-started': { bg: '#F1F5F9', border: '#CBD5E1', text: '#64748B' },
+}
+
+function deriveStageStatus(stage: PreProdStage, today: string): string {
+  const s = stage.currentIteration?.status
+  if (!s) return 'not-started'
+  if (s === 'approved') return 'approved'
+  if (s === 'rejected') return 'rejected'
+  if (stage.plannedDate && stage.plannedDate < today) return 'overdue'
+  return 'pending'
+}
+
+function PreProductionHealthView() {
+  const [filterStatus, setFilterStatus] = useState<'all'|'pending'|'overdue'|'blocked'>('all')
+  const [drawerOrder, setDrawerOrder]   = useState<SubOrder | null>(null)
+  const [drawerVisible, setDrawerVisible] = useState(false)
+  const today = new Date().toISOString().split('T')[0]
+
+  const preProdOrders = useMemo(() =>
+    mockSubOrders.filter(o => o.currentStage === 'pre-prod'),
+    []
+  )
+
+  function openDrawer(o: SubOrder) {
+    setDrawerOrder(o); setDrawerVisible(true)
+    document.body.style.overflow = 'hidden'
+  }
+  function closeDrawer() {
+    setDrawerVisible(false)
+    setTimeout(() => { setDrawerOrder(null); document.body.style.overflow = '' }, 300)
+  }
+
+  type KpiFilter = 'all'|'pending'|'overdue'|'blocked'
+
+  const kpi = useMemo(() => {
+    let onTrack = 0, pendingReview = 0, overdue = 0, blocked = 0
+    for (const o of preProdOrders) {
+      const statuses = o.preProdStages.map(s => deriveStageStatus(s, today))
+      const hasOverdue = statuses.some(s => s === 'overdue')
+      const hasPending = statuses.some(s => s === 'pending')
+      const allApproved = statuses.every(s => s === 'approved')
+      if (hasOverdue) overdue++
+      else if (hasPending) pendingReview++
+      else if (allApproved) blocked++ // production gate not yet cleared (would need productionUnlocked check)
+      else onTrack++
+    }
+    return { onTrack, pendingReview, overdue, blocked }
+  }, [preProdOrders, today])
+
+  const filtered = useMemo(() => {
+    if (filterStatus === 'all') return preProdOrders
+    return preProdOrders.filter(o => {
+      const statuses = o.preProdStages.map(s => deriveStageStatus(s, today))
+      if (filterStatus === 'overdue')  return statuses.some(s => s === 'overdue')
+      if (filterStatus === 'pending')  return statuses.some(s => s === 'pending') && !statuses.some(s => s === 'overdue')
+      if (filterStatus === 'blocked')  return statuses.every(s => s === 'approved')
+      return true
+    })
+  }, [preProdOrders, filterStatus, today])
+
+  const C = {
+    bg: '#FAF9F6', surface: '#FFFFFF', text: '#1C1917', sec: '#78716C',
+    ter: '#A8A29E', border: '#E7E5E0', subtle: '#F5F4EF',
+    primary: '#CC785C', primaryLight: '#FDF0EB',
+  }
+
+  const kpiCards: { label: string; value: number; filter: KpiFilter; color: string; bg: string; border: string }[] = [
+    { label: 'On Track',       value: kpi.onTrack,      filter: 'all',     color: '#065F46', bg: '#F0FDF4', border: '#BBF7D0' },
+    { label: 'Pending Review', value: kpi.pendingReview,filter: 'pending', color: '#92400E', bg: '#FFFBEB', border: '#FDE68A' },
+    { label: 'Overdue',        value: kpi.overdue,      filter: 'overdue', color: '#991B1B', bg: '#FEF2F2', border: '#FECACA' },
+    { label: 'All Approved',   value: kpi.blocked,      filter: 'blocked', color: '#1D4ED8', bg: '#EFF6FF', border: '#BFDBFE' },
+  ]
+
+  return (
+    <div style={{ padding: '20px 28px', background: C.bg, minHeight: '100vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {/* KPI cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
+        {kpiCards.map(card => (
+          <button key={card.filter} onClick={() => setFilterStatus(filterStatus === card.filter ? 'all' : card.filter)}
+            style={{
+              background: filterStatus === card.filter ? card.bg : C.surface,
+              border: `1.5px solid ${filterStatus === card.filter ? card.border : C.border}`,
+              borderRadius: 14, padding: '14px 16px', cursor: 'pointer', textAlign: 'left',
+              boxShadow: filterStatus === card.filter ? `0 0 0 3px ${card.border}` : 'none',
+              transition: 'all 0.15s ease', fontFamily: 'inherit',
+            }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: card.color, letterSpacing: '-0.02em' }}>{card.value}</div>
+            <div style={{ fontSize: 12, color: C.sec, marginTop: 2, fontWeight: 500 }}>{card.label}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: C.subtle, borderBottom: `1px solid ${C.border}` }}>
+              {['Sub-Order','Style','Vendor','POC','Stage Progress','Current Stage','Plan Completion','Status'].map(h => (
+                <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.ter, textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={8} style={{ padding: '32px 0', textAlign: 'center', color: C.ter, fontSize: 13 }}>No orders match this filter.</td></tr>
+            )}
+            {filtered.map((o, i) => {
+              const statuses = o.preProdStages.map(s => deriveStageStatus(s, today))
+              const approvedCount = statuses.filter(s => s === 'approved').length
+              const firstPending = o.preProdStages.find((s, si) => statuses[si] !== 'approved')
+              const currentStageName = firstPending?.name ?? (approvedCount === 7 ? 'All done' : '—')
+              const firstPendingIdx = o.preProdStages.findIndex((s, si) => statuses[si] !== 'approved')
+              const roundNum = firstPending ? (firstPending.pastIterations.length + (firstPending.currentIteration ? 1 : 0)) : 0
+              const lastPendingPlanned = [...o.preProdStages].reverse().find(s => s.plannedDate)?.plannedDate
+              const hasOverdue = statuses.some(s => s === 'overdue')
+              const hasPending = statuses.some(s => s === 'pending')
+              return (
+                <tr key={o.id}
+                  onClick={() => openDrawer(o)}
+                  style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 0.1s ease' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = C.subtle}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = ''}
+                >
+                  <td style={{ padding: '10px 14px', fontWeight: 600, color: C.text, fontSize: 12, whiteSpace: 'nowrap' }}>{o.id}</td>
+                  <td style={{ padding: '10px 14px' }}>
+                    <div style={{ fontWeight: 500, color: C.text, fontSize: 12 }}>{o.styleCode}</div>
+                    <div style={{ fontSize: 11, color: C.ter }}>{o.colour}</div>
+                  </td>
+                  <td style={{ padding: '10px 14px', fontSize: 12, color: C.sec, whiteSpace: 'nowrap' }}>{o.vendor.name.split(' ')[0]}</td>
+                  <td style={{ padding: '10px 14px', fontSize: 12, color: C.sec, whiteSpace: 'nowrap' }}>{o.poc.initials}</td>
+                  <td style={{ padding: '10px 14px' }}>
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      {o.preProdStages.map((s, si) => {
+                        const st = statuses[si]
+                        const dot = PP_STATUS_DOT[st] ?? PP_STATUS_DOT['not-started']
+                        const abbr = PP_ABBR_PORT[s.stageKey] ?? String(si+1)
+                        return (
+                          <div key={s.id} title={`${s.name}: ${st}`} style={{
+                            width: 24, height: 24, borderRadius: '50%', fontSize: 8, fontWeight: 700,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                            background: dot.bg, border: `1.5px solid ${dot.border}`, color: dot.text,
+                          }}>
+                            {st === 'approved' ? '✓' : abbr}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </td>
+                  <td style={{ padding: '10px 14px', fontSize: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: C.text }}>{currentStageName}</span>
+                      {roundNum > 1 && <span style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A', borderRadius: 12, padding: '1px 6px', fontWeight: 600 }}>R{roundNum}</span>}
+                    </div>
+                  </td>
+                  <td style={{ padding: '10px 14px', fontSize: 12, color: C.sec, whiteSpace: 'nowrap' }}>
+                    {lastPendingPlanned ? new Date(lastPendingPlanned).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '—'}
+                  </td>
+                  <td style={{ padding: '10px 14px' }}>
+                    <span style={{
+                      fontSize: 11, padding: '3px 8px', borderRadius: 20, fontWeight: 600,
+                      background: hasOverdue ? '#FEE2E2' : hasPending ? '#FEF3C7' : '#D1FAE5',
+                      color: hasOverdue ? '#991B1B' : hasPending ? '#92400E' : '#065F46',
+                      border: `1px solid ${hasOverdue ? '#FCA5A5' : hasPending ? '#FDE68A' : '#6EE7B7'}`,
+                    }}>
+                      {hasOverdue ? 'Overdue' : hasPending ? 'Pending review' : 'On track'}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Drawer */}
+      {drawerOrder && (
+        <>
+          <div onClick={closeDrawer} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.3)', zIndex: 40, opacity: drawerVisible ? 1 : 0, transition: 'opacity 0.3s' }} />
+          <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', width: '100%', maxWidth: 820, background: '#fff', boxShadow: '-4px 0 32px rgba(0,0,0,0.12)', zIndex: 50, transform: drawerVisible ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 0.3s ease-out', overflow: 'auto' }}>
+            <SubOrderPanel order={drawerOrder} initialTab="pre-prod" onClose={closeDrawer} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function SamplingView() {
   const { currentUser } = useCurrentUser()
   const [orders,          setOrders]          = useState<SamplingOrder[]>(SAMPLING_ORDERS)
@@ -10615,7 +10813,7 @@ function PortfolioContent() {
       <Header title={tabTitle[tab] ?? 'My Portfolio'} subtitle={subtitles[tab] ?? ''} />
       {tab === 'vendor-assign'  ? <VendorAssignView />       :
        tab === 'costing'        ? <CostingView />             :
-       tab === 'pre-production' ? <SamplingView />            :
+       tab === 'pre-production' ? <PreProductionHealthView /> :
        tab === 'production'     ? <StageView tabKey="production"  /> :
        tab === 'inspection'     ? <InspectionView />                 :
        tab === 'asn'            ? <AsnView />                          :

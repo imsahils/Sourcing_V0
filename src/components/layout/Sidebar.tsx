@@ -10,6 +10,7 @@ import {
   Star, UserCog, ClipboardList, Plus, GitMerge,
   ChevronDown, Search, IndianRupee, LogOut,
   FlaskConical, Package, Factory, ScanLine, Truck, Bell,
+  Droplet, Stamp, Shirt, Ruler,
 } from 'lucide-react'
 import { useVendorNotifications } from '@/lib/vendor-notifications'
 
@@ -24,6 +25,7 @@ type NavItem = {
   section: 'poc' | 'mgr' | 'qa' | 'ops'
   visibleTo: UserRole[] | 'all'
   subItems?: SubItem[]
+  linkToBase?: boolean   // parent links to href (not first sub-item)
 }
 
 // ─── Nav Config ───────────────────────────────────────────────────────────────
@@ -51,7 +53,24 @@ const navItems: NavItem[] = [
       { label: 'Order Assignment', tab: 'assignment' },
     ],
   },
-  { label: 'Sampling',        href: '/sampling',         icon: FlaskConical,  section: 'poc', visibleTo: ['designer', 'fit-technician'] },
+  {
+    label: 'Pre-Production', href: '/pre-prod', icon: FlaskConical, section: 'poc',
+    visibleTo: ['designer'], linkToBase: true,
+    subItems: [
+      { label: 'Lab Dip',    tab: 'lab-dip'    },
+      { label: 'Strike Off', tab: 'strike-off' },
+      { label: 'PP Sample',  tab: 'pp-sample'  },
+    ],
+  },
+  {
+    label: 'Pre-Production', href: '/pre-prod', icon: FlaskConical, section: 'poc',
+    visibleTo: ['fit-technician'], linkToBase: true,
+    subItems: [
+      { label: 'Fit Sample', tab: 'fit-sample' },
+      { label: 'PP Fit',     tab: 'pp-fit'     },
+      { label: 'PP Sample',  tab: 'pp-sample'  },
+    ],
+  },
   { label: 'Purchase Orders', href: '/purchase-orders',  icon: Package,       section: 'poc', visibleTo: ['sourcing-mis'] },
   { label: 'Vendors',         href: '/vendors',          icon: Building2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr'] },
   { label: 'Reports / DPR',   href: '/reports',          icon: BarChart2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr', 'category-head', 'buying-poc'] },
@@ -87,6 +106,12 @@ const subIcons: Record<string, React.ComponentType<{ size?: number; color?: stri
   production:       Factory,
   inspection:       ScanLine,
   asn:              Truck,
+  // Pre-prod stage sub-items
+  'lab-dip':        Droplet,
+  'strike-off':     Stamp,
+  'fit-sample':     Ruler,
+  'pp-sample':      Shirt,
+  'pp-fit':         Ruler,
 }
 
 // ─── Styles (inline with DS tokens) ──────────────────────────────────────────
@@ -386,7 +411,7 @@ export function Sidebar() {
 
                 {/* Main nav item */}
                 <Link
-                  href={item.subItems ? `${item.href}?tab=${item.subItems[0].tab}` : item.href}
+                  href={item.subItems && !item.linkToBase ? `${item.href}?tab=${item.subItems[0].tab}` : item.href}
                   onClick={closeMobile}
                   onMouseEnter={() => setHovered(item.href)}
                   onMouseLeave={() => setHovered(null)}

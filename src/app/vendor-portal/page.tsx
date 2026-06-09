@@ -459,7 +459,8 @@ function SampleDispatchModal({
 }) {
   // Pre-fill sentTo from next pending pre-prod stage approver if possible
   const nextPending = order.preProdStages.find(s => s.status === 'pending' || s.status === 'not-started')
-  const defaultSentTo = nextPending?.approverRole ?? ''
+  const rRoleLabels: Record<string,string> = { 'designer':'Designer','fit-technician':'Fit Technician','sourcing-poc':'POC' }
+  const defaultSentTo = nextPending ? (rRoleLabels[nextPending.reviewerRole] ?? nextPending.reviewerRole) : ''
 
   const [draft, setDraft] = useState<DispatchDraft>({
     sampleType:   'Fit Sample',
@@ -1609,9 +1610,9 @@ function VendorView() {
                                   </div>
                                   <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-400">
                                     <span>Due: {fmtD(stage.plannedDate)}</span>
-                                    {stage.actualDate && <span className="text-green-600">Done: {fmtD(stage.actualDate)}</span>}
-                                    {stage.approvedBy && <span>By: {stage.approvedBy}</span>}
-                                    {!stage.approvedBy && stage.approverRole && <span>Reviewer: {stage.approverRole}</span>}
+                                    {stage.currentIteration?.reviewedAt && <span className="text-green-600">Done: {fmtD(stage.currentIteration.reviewedAt)}</span>}
+                                    {stage.currentIteration?.reviewerName && <span>By: {stage.currentIteration.reviewerName}</span>}
+                                    {!stage.currentIteration?.reviewerName && stage.reviewerRole && <span>Reviewer: {stage.reviewerRole.replace('-',' ')}</span>}
                                   </div>
                                 </div>
                               </div>
