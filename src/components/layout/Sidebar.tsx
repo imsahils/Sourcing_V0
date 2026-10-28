@@ -73,6 +73,7 @@ const navItems: NavItem[] = [
   },
   { label: 'Purchase Orders', href: '/purchase-orders',  icon: Package,       section: 'poc', visibleTo: ['sourcing-mis'] },
   { label: 'Vendors',         href: '/vendors',          icon: Building2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr'] },
+  { label: 'Costing Approvals', href: '/buying-approvals', icon: IndianRupee,  section: 'poc', visibleTo: ['buying-poc'] },
   { label: 'Reports / DPR',   href: '/reports',          icon: BarChart2,     section: 'poc', visibleTo: ['sourcing-poc', 'sourcing-mgr', 'category-head', 'buying-poc'] },
   { label: 'Daily Production',href: '/reports?view=dpr', icon: Factory,       section: 'poc', visibleTo: ['vendor'] },
   { label: 'Order Costing',   href: '/reports?view=costing', icon: IndianRupee, section: 'poc', visibleTo: ['vendor'] },

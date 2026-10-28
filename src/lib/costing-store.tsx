@@ -7,6 +7,13 @@ import type { OpenCostingBreakdown } from '@/lib/vendor-costing'
 
 export type CostStatus = 'no-vendor' | 'pending' | 'submitted' | 'approved' | 'rejected' | 'escalated'
 
+// Second-level sign-off by the Buying team, after Sourcing (level 1) has approved.
+// 'pending'  — awaiting Buying decision
+// 'approved' — Buying signed off (costing fully locked)
+// 'revision' — Buying sent it back to Sourcing/vendor for a revised quote
+// 'rejected' — Buying rejected the costing outright
+export type BuyingApprovalStatus = 'pending' | 'approved' | 'revision' | 'rejected'
+
 export type CostingOrder = {
   id: string
   styleCode: string
@@ -25,8 +32,14 @@ export type CostingOrder = {
   submittedCost?: number
   breakdown?: OpenCostingBreakdown
   submittedOn?: string
-  approvedBy?: string
+  approvedBy?: string           // Sourcing (level-1) approver
   approvedOn?: string
+  approverRole?: string         // 'Sourcing POC' | 'Sourcing Manager' | 'Category Head'
+  // ─── Buying team (level-2) sign-off ──────────────────────────
+  buyingStatus?: BuyingApprovalStatus
+  buyingDecisionBy?: string
+  buyingDecisionOn?: string
+  buyingFeedback?: string       // revision / rejection note from Buying
   rejectedReason?: string
   escalationReason?: string
   notes?: string
@@ -149,7 +162,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 280, targetPrice: 520, costStatus: 'approved',
     submittedCost: 498,
     breakdown: { mainFabricPrice: 138, mainFabricConsumption: 1.5, trimFabricPrice: 26, trimFabricConsumption: 0.5, trimCostThread: 58, cmp: 116, valueAddition: 50, testing: 12, logistic: 8, rejectionPct: 2, marginPct: 5.5 },
-    submittedOn: '2026-04-18', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-22',
+    submittedOn: '2026-04-18', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-22', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
     buyingExpectedDate: '2026-06-25', vendorTargetDate: '2026-06-10',
     season: 'SS25',
     notes: 'Zari work cost elevated. Approved — within acceptable 4.2% under target range.',
@@ -161,7 +175,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 900, targetPrice: 245, costStatus: 'approved',
     submittedCost: 238,
     breakdown: { mainFabricPrice: 72, mainFabricConsumption: 1.2, trimFabricPrice: 18, trimFabricConsumption: 0.4, trimCostThread: 28, cmp: 72, valueAddition: 22, testing: 8, logistic: 6, rejectionPct: 2, marginPct: 2 },
-    submittedOn: '2026-04-14', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-17',
+    submittedOn: '2026-04-14', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-17', approverRole: 'Sourcing POC',
+    buyingStatus: 'approved', buyingDecisionBy: 'Rahul Desai', buyingDecisionOn: '2026-04-18',
     buyingExpectedDate: '2026-06-12', vendorTargetDate: '2026-05-28',
     confirmedInwardDate: '2026-06-02', inwardDateConfirmed: true,
     season: 'SS25',
@@ -173,7 +188,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 650, targetPrice: 198, costStatus: 'approved',
     submittedCost: 192,
     breakdown: { mainFabricPrice: 58, mainFabricConsumption: 1.2, trimFabricPrice: 16, trimFabricConsumption: 0.3, trimCostThread: 24, cmp: 58, valueAddition: 18, testing: 6, logistic: 4, rejectionPct: 2, marginPct: 2 },
-    submittedOn: '2026-04-10', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-12',
+    submittedOn: '2026-04-10', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-12', approverRole: 'Sourcing POC',
+    buyingStatus: 'approved', buyingDecisionBy: 'Rahul Desai', buyingDecisionOn: '2026-04-13',
     buyingExpectedDate: '2026-06-01', vendorTargetDate: '2026-05-15',
     confirmedInwardDate: '2026-05-22', inwardDateConfirmed: true,
     season: 'SS25',
@@ -224,7 +240,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
       testing: 8, logistic: 6, rejectionPct: 2, marginPct: 2,
     },
     submittedOn: '2026-04-07',
-    approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-10',
+    approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-10', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
     buyingExpectedDate: '2026-05-30', vendorTargetDate: '2026-05-15',
     season: 'AW26',
   },
@@ -440,6 +457,10 @@ type CostingStoreValue = {
   cancelRFQ: (rfqId: string) => void
   followUpRFQ: (rfqId: string) => void
   vendorSubmitRFQ: (rfqId: string, cost: number, breakdown: OpenCostingBreakdown, notes: string, promisedDate: string) => void
+  // Buying team (level-2) actions
+  buyingApprove: (id: string, by: string, notes?: string) => void
+  buyingRequestRevision: (id: string, by: string, feedback: string) => void
+  buyingReject: (id: string, by: string, reason: string) => void
 }
 
 const CostingStoreContext = createContext<CostingStoreValue | null>(null)
@@ -541,11 +562,45 @@ export function CostingStoreProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  const today = () => new Date().toISOString().split('T')[0]
+
+  const buyingApprove = (id: string, by: string, notes?: string) => {
+    updateOrder(id, {
+      buyingStatus: 'approved',
+      buyingDecisionBy: by,
+      buyingDecisionOn: today(),
+      buyingFeedback: notes?.trim() || undefined,
+    })
+  }
+
+  // Send back to Sourcing/vendor for a revised quote — re-opens level-1 review.
+  const buyingRequestRevision = (id: string, by: string, feedback: string) => {
+    updateOrder(id, {
+      buyingStatus: 'revision',
+      buyingDecisionBy: by,
+      buyingDecisionOn: today(),
+      buyingFeedback: feedback,
+      costStatus: 'submitted',
+    })
+  }
+
+  const buyingReject = (id: string, by: string, reason: string) => {
+    updateOrder(id, {
+      buyingStatus: 'rejected',
+      buyingDecisionBy: by,
+      buyingDecisionOn: today(),
+      buyingFeedback: reason,
+      costStatus: 'rejected',
+      rejectedReason: reason,
+    })
+  }
+
   return (
     <CostingStoreContext.Provider value={{
       orders, rfqs,
       updateOrder, addOrders, removeOrders,
       sendRFQ, updateRFQ, cancelRFQ, followUpRFQ, vendorSubmitRFQ,
+      buyingApprove, buyingRequestRevision, buyingReject,
     }}>
       {children}
     </CostingStoreContext.Provider>
