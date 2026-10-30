@@ -7,6 +7,43 @@ import type { OpenCostingBreakdown } from '@/lib/vendor-costing'
 
 export type CostStatus = 'no-vendor' | 'pending' | 'submitted' | 'approved' | 'rejected' | 'escalated'
 
+// Second-level sign-off by the Buying team, after Sourcing (level 1) has approved.
+// 'pending'  — awaiting Buying decision
+// 'approved' — Buying signed off (costing fully locked)
+// 'revision' — Buying sent it back to Sourcing/vendor for a revised quote
+// 'rejected' — Buying rejected the costing outright
+export type BuyingApprovalStatus = 'pending' | 'approved' | 'revision' | 'rejected'
+
+// One entry in a style's costing audit trail. Costing can go through several
+// rounds — each rejection / revision sends it back and the vendor resubmits.
+export type CostingEventType =
+  | 'submitted'           // vendor submitted open costing
+  | 'resubmitted'         // vendor submitted a revised quote (new round)
+  | 'sourcing-approved'   // level-1 sign-off
+  | 'buying-approved'     // level-2 sign-off
+  | 'revision-requested'  // Buying sent back for a revised quote
+  | 'rejected'            // Buying rejected outright
+
+// A reply on a costing comment thread (e.g. Sourcing responding to Buying).
+export type CostingComment = {
+  by: string
+  role: string
+  date: string
+  text: string
+}
+
+export type CostingEvent = {
+  round: number
+  type: CostingEventType
+  by: string
+  role: string            // 'Vendor' | 'Sourcing POC' | 'Sourcing Manager' | 'Category Head' | 'Buying POC'
+  date: string
+  comment?: string
+  replies?: CostingComment[]  // thread of responses to `comment`
+  cost?: number           // open-costing total/pc captured at this event
+  breakdown?: OpenCostingBreakdown
+}
+
 export type CostingOrder = {
   id: string
   styleCode: string
@@ -25,8 +62,16 @@ export type CostingOrder = {
   submittedCost?: number
   breakdown?: OpenCostingBreakdown
   submittedOn?: string
-  approvedBy?: string
+  approvedBy?: string           // Sourcing (level-1) approver
   approvedOn?: string
+  approverRole?: string         // 'Sourcing POC' | 'Sourcing Manager' | 'Category Head'
+  // ─── Buying team (level-2) sign-off ──────────────────────────
+  buyingStatus?: BuyingApprovalStatus
+  buyingDecisionBy?: string
+  buyingDecisionOn?: string
+  buyingFeedback?: string       // revision / rejection note from Buying
+  round?: number                // current costing round (1-based)
+  history?: CostingEvent[]      // full audit trail across rounds
   rejectedReason?: string
   escalationReason?: string
   notes?: string
@@ -149,7 +194,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 280, targetPrice: 520, costStatus: 'approved',
     submittedCost: 498,
     breakdown: { mainFabricPrice: 138, mainFabricConsumption: 1.5, trimFabricPrice: 26, trimFabricConsumption: 0.5, trimCostThread: 58, cmp: 116, valueAddition: 50, testing: 12, logistic: 8, rejectionPct: 2, marginPct: 5.5 },
-    submittedOn: '2026-04-18', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-22',
+    submittedOn: '2026-04-18', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-22', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
     buyingExpectedDate: '2026-06-25', vendorTargetDate: '2026-06-10',
     season: 'SS25',
     notes: 'Zari work cost elevated. Approved — within acceptable 4.2% under target range.',
@@ -161,7 +207,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 900, targetPrice: 245, costStatus: 'approved',
     submittedCost: 238,
     breakdown: { mainFabricPrice: 72, mainFabricConsumption: 1.2, trimFabricPrice: 18, trimFabricConsumption: 0.4, trimCostThread: 28, cmp: 72, valueAddition: 22, testing: 8, logistic: 6, rejectionPct: 2, marginPct: 2 },
-    submittedOn: '2026-04-14', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-17',
+    submittedOn: '2026-04-14', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-17', approverRole: 'Sourcing POC',
+    buyingStatus: 'approved', buyingDecisionBy: 'Rahul Desai', buyingDecisionOn: '2026-04-18',
     buyingExpectedDate: '2026-06-12', vendorTargetDate: '2026-05-28',
     confirmedInwardDate: '2026-06-02', inwardDateConfirmed: true,
     season: 'SS25',
@@ -173,7 +220,8 @@ const INITIAL_ORDERS: CostingOrder[] = [
     orderQty: 650, targetPrice: 198, costStatus: 'approved',
     submittedCost: 192,
     breakdown: { mainFabricPrice: 58, mainFabricConsumption: 1.2, trimFabricPrice: 16, trimFabricConsumption: 0.3, trimCostThread: 24, cmp: 58, valueAddition: 18, testing: 6, logistic: 4, rejectionPct: 2, marginPct: 2 },
-    submittedOn: '2026-04-10', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-12',
+    submittedOn: '2026-04-10', approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-12', approverRole: 'Sourcing POC',
+    buyingStatus: 'approved', buyingDecisionBy: 'Rahul Desai', buyingDecisionOn: '2026-04-13',
     buyingExpectedDate: '2026-06-01', vendorTargetDate: '2026-05-15',
     confirmedInwardDate: '2026-05-22', inwardDateConfirmed: true,
     season: 'SS25',
@@ -224,9 +272,107 @@ const INITIAL_ORDERS: CostingOrder[] = [
       testing: 8, logistic: 6, rejectionPct: 2, marginPct: 2,
     },
     submittedOn: '2026-04-07',
-    approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-10',
+    approvedBy: 'Parthipan Kumar', approvedOn: '2026-04-10', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
     buyingExpectedDate: '2026-05-30', vendorTargetDate: '2026-05-15',
     season: 'AW26',
+  },
+  // ── Additional Buying-queue styles (Sourcing-approved, awaiting Buying) ──────
+  {
+    id: 'NNKNTW250041', styleCode: 'NN441-120', styleName: 'Girls Ribbed Knit Co-ord Set',
+    colour: 'TEAL', category: 'Knits', vendor: 'SWARA CREATION', vendorLocation: 'SURAT', vendorId: 'v10',
+    orderQty: 540, targetPrice: 315, costStatus: 'approved',
+    submittedCost: 298,
+    breakdown: { mainFabricPrice: 88, mainFabricConsumption: 1.3, trimFabricPrice: 18, trimFabricConsumption: 0.3, trimCostThread: 34, cmp: 74, valueAddition: 20, testing: 9, logistic: 7, rejectionPct: 2, marginPct: 3 },
+    submittedOn: '2026-05-04', approvedBy: 'Parthipan Kumar', approvedOn: '2026-05-06', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
+    buyingExpectedDate: '2026-07-20', vendorTargetDate: '2026-07-05',
+    season: 'AW26',
+    notes: 'Ribbed knit sourced locally — competitive CMT, co-loaded with existing Surat order.',
+  },
+  {
+    id: 'NNKNTW250042', styleCode: 'NN442-210', styleName: 'Boys Hooded Puffer Jacket',
+    colour: 'NAVY', category: 'Wovens', vendor: 'CAARVI TEXTILES', vendorLocation: 'DELHI', vendorId: 'v8',
+    orderQty: 380, targetPrice: 640, costStatus: 'approved',
+    submittedCost: 668,
+    breakdown: { mainFabricPrice: 150, mainFabricConsumption: 1.8, trimFabricPrice: 40, trimFabricConsumption: 0.6, trimCostThread: 72, cmp: 150, valueAddition: 30, testing: 14, logistic: 16, rejectionPct: 2, marginPct: 4 },
+    submittedOn: '2026-05-05', approvedBy: 'Meena Iyer', approvedOn: '2026-05-08', approverRole: 'Sourcing Manager',
+    buyingStatus: 'pending', round: 2,
+    buyingExpectedDate: '2026-08-10', vendorTargetDate: '2026-07-25',
+    season: 'AW26',
+    notes: 'Poly-fill cost up 5% this season; revised quote after Buying feedback — now +4.4% over target.',
+    history: [
+      { round: 1, type: 'submitted', by: 'CAARVI TEXTILES', role: 'Vendor', date: '2026-04-28', cost: 712,
+        breakdown: { mainFabricPrice: 160, mainFabricConsumption: 1.8, trimFabricPrice: 42, trimFabricConsumption: 0.6, trimCostThread: 78, cmp: 162, valueAddition: 34, testing: 14, logistic: 16, rejectionPct: 2, marginPct: 5 } },
+      { round: 1, type: 'sourcing-approved', by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-04-30' },
+      { round: 1, type: 'revision-requested', by: 'Rahul Desai', role: 'Buying POC', date: '2026-05-01',
+        comment: 'Quote is ~11% over target. Fill GSM looks high for the price band — please renegotiate poly-fill and CMP and resubmit.',
+        replies: [
+          { by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-05-03',
+            text: 'Agreed — took it back to the mill. Poly-fill GSM reduced to 220 and CMP down ₹12. Revised quote at ₹668 (+4.4%), resubmitting now.' },
+        ] },
+      { round: 2, type: 'resubmitted', by: 'CAARVI TEXTILES', role: 'Vendor', date: '2026-05-05', cost: 668,
+        breakdown: { mainFabricPrice: 150, mainFabricConsumption: 1.8, trimFabricPrice: 40, trimFabricConsumption: 0.6, trimCostThread: 72, cmp: 150, valueAddition: 30, testing: 14, logistic: 16, rejectionPct: 2, marginPct: 4 } },
+      { round: 2, type: 'sourcing-approved', by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-05-08' },
+    ],
+  },
+  {
+    id: 'NNKNTW250043', styleCode: 'NN443-055', styleName: 'Girls Sequin Party Dress',
+    colour: 'MAROON', category: 'Wovens', vendor: 'ADITEE INTERNATIONAL', vendorLocation: 'JAIPUR', vendorId: 'v7',
+    orderQty: 260, targetPrice: 560, costStatus: 'approved',
+    submittedCost: 622,
+    breakdown: { mainFabricPrice: 160, mainFabricConsumption: 1.6, trimFabricPrice: 30, trimFabricConsumption: 0.5, trimCostThread: 70, cmp: 128, valueAddition: 72, testing: 14, logistic: 12, rejectionPct: 2.5, marginPct: 6 },
+    submittedOn: '2026-05-02', approvedBy: 'Arvind Rao', approvedOn: '2026-05-07', approverRole: 'Category Head',
+    buyingStatus: 'rejected', buyingDecisionBy: 'Rahul Desai', buyingDecisionOn: '2026-05-09', round: 1,
+    buyingFeedback: 'Margin unviable at this quote — sequin premium pushes it 11% over target with no MRP headroom. Rejecting; please re-source a simpler embellishment or drop the style.',
+    rejectedReason: 'Margin unviable — 11% over target with no MRP headroom.',
+    buyingExpectedDate: '2026-07-18', vendorTargetDate: '2026-07-02',
+    season: 'SS25',
+    notes: 'Hand-sequin work drives value addition; +11% over target — escalated and cleared by Category Head.',
+    history: [
+      { round: 1, type: 'submitted', by: 'ADITEE INTERNATIONAL', role: 'Vendor', date: '2026-05-02', cost: 622,
+        breakdown: { mainFabricPrice: 160, mainFabricConsumption: 1.6, trimFabricPrice: 30, trimFabricConsumption: 0.5, trimCostThread: 70, cmp: 128, valueAddition: 72, testing: 14, logistic: 12, rejectionPct: 2.5, marginPct: 6 } },
+      { round: 1, type: 'sourcing-approved', by: 'Arvind Rao', role: 'Category Head', date: '2026-05-07',
+        comment: 'Above 5% band — reviewed embellishment sample, costing is fair for the work. Cleared to Buying.' },
+      { round: 1, type: 'rejected', by: 'Rahul Desai', role: 'Buying POC', date: '2026-05-09',
+        comment: 'Margin unviable at this quote — sequin premium pushes it 11% over target with no MRP headroom. Rejecting; please re-source a simpler embellishment or drop the style.' },
+    ],
+  },
+  {
+    id: 'NNKNTW250044', styleCode: 'NN444-300', styleName: 'Boys Cotton Pique Polo',
+    colour: 'WHITE', category: 'Knits', vendor: 'BS FASHION', vendorLocation: 'KOLKATA', vendorId: 'v4',
+    orderQty: 820, targetPrice: 185, costStatus: 'approved',
+    submittedCost: 172,
+    breakdown: { mainFabricPrice: 58, mainFabricConsumption: 1.1, trimFabricPrice: 10, trimFabricConsumption: 0.25, trimCostThread: 20, cmp: 52, valueAddition: 0, testing: 7, logistic: 5, rejectionPct: 2, marginPct: 2 },
+    submittedOn: '2026-05-03', approvedBy: 'Parthipan Kumar', approvedOn: '2026-05-05', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
+    buyingExpectedDate: '2026-07-12', vendorTargetDate: '2026-06-28',
+    season: 'SS25',
+    notes: 'High-volume basic — 7% under target on strong CMT.',
+  },
+  {
+    id: 'NNKNTW250045', styleCode: 'NN445-145', styleName: 'Girls Denim Pinafore',
+    colour: 'BLUE', category: 'Wovens', vendor: 'DIV CREATIONS', vendorLocation: 'FARIDABAD', vendorId: 'v5',
+    orderQty: 300, targetPrice: 430, costStatus: 'approved',
+    submittedCost: 441,
+    breakdown: { mainFabricPrice: 118, mainFabricConsumption: 1.5, trimFabricPrice: 22, trimFabricConsumption: 0.4, trimCostThread: 44, cmp: 92, valueAddition: 24, testing: 11, logistic: 9, rejectionPct: 2, marginPct: 4 },
+    submittedOn: '2026-05-06', approvedBy: 'Meena Iyer', approvedOn: '2026-05-09', approverRole: 'Sourcing Manager',
+    buyingStatus: 'pending',
+    buyingExpectedDate: '2026-08-02', vendorTargetDate: '2026-07-18',
+    season: 'AW26',
+    notes: 'Denim rates firm; +2.6% over target — within Sourcing Manager band.',
+  },
+  {
+    id: 'NNKNTW250046', styleCode: 'NN446-088', styleName: 'Boys Fleece Joggers',
+    colour: 'OLIVE', category: 'Knits', vendor: 'AND DESIGN', vendorLocation: 'JAIPUR', vendorId: 'v6',
+    orderQty: 600, targetPrice: 240, costStatus: 'approved',
+    submittedCost: 225,
+    breakdown: { mainFabricPrice: 70, mainFabricConsumption: 1.3, trimFabricPrice: 14, trimFabricConsumption: 0.3, trimCostThread: 26, cmp: 62, valueAddition: 12, testing: 8, logistic: 6, rejectionPct: 2, marginPct: 3 },
+    submittedOn: '2026-05-04', approvedBy: 'Parthipan Kumar', approvedOn: '2026-05-06', approverRole: 'Sourcing POC',
+    buyingStatus: 'pending',
+    buyingExpectedDate: '2026-07-28', vendorTargetDate: '2026-07-14',
+    season: 'AW26',
+    notes: 'Fleece co-loaded with sweatshirt order — 6% under target.',
   },
   // Scenario: Split parent — order split across two vendors
   {
@@ -440,6 +586,12 @@ type CostingStoreValue = {
   cancelRFQ: (rfqId: string) => void
   followUpRFQ: (rfqId: string) => void
   vendorSubmitRFQ: (rfqId: string, cost: number, breakdown: OpenCostingBreakdown, notes: string, promisedDate: string) => void
+  // Buying team (level-2) actions
+  buyingApprove: (id: string, by: string, notes?: string) => void
+  buyingRequestRevision: (id: string, by: string, feedback: string) => void
+  buyingReject: (id: string, by: string, reason: string) => void
+  // Reply on a round's comment thread (the revision/rejection discussion).
+  addCostingReply: (id: string, round: number, reply: CostingComment) => void
 }
 
 const CostingStoreContext = createContext<CostingStoreValue | null>(null)
@@ -541,11 +693,71 @@ export function CostingStoreProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  const today = () => new Date().toISOString().split('T')[0]
+
+  const currentRound = (o: CostingOrder) =>
+    o.round ?? (o.history?.length ? Math.max(...o.history.map(h => h.round)) : 1)
+
+  // Apply a Buying decision + append it to the style's history in one update.
+  const decide = (
+    id: string,
+    patch: Partial<CostingOrder>,
+    event: Omit<CostingEvent, 'round' | 'date'>,
+    nextRound?: (round: number) => number,
+  ) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id !== id) return o
+      const round = currentRound(o)
+      return {
+        ...o,
+        ...patch,
+        round: nextRound ? nextRound(round) : round,
+        history: [...(o.history ?? []), { ...event, round, date: today() }],
+      }
+    }))
+  }
+
+  const buyingApprove = (id: string, by: string, notes?: string) => {
+    const comment = notes?.trim() || undefined
+    decide(id,
+      { buyingStatus: 'approved', buyingDecisionBy: by, buyingDecisionOn: today(), buyingFeedback: comment },
+      { type: 'buying-approved', by, role: 'Buying POC', comment })
+  }
+
+  // Send back to Sourcing/vendor for a revised quote — re-opens level-1 review
+  // and advances to the next costing round.
+  const buyingRequestRevision = (id: string, by: string, feedback: string) => {
+    decide(id,
+      { buyingStatus: 'revision', buyingDecisionBy: by, buyingDecisionOn: today(), buyingFeedback: feedback, costStatus: 'submitted' },
+      { type: 'revision-requested', by, role: 'Buying POC', comment: feedback },
+      round => round + 1)
+  }
+
+  const buyingReject = (id: string, by: string, reason: string) => {
+    decide(id,
+      { buyingStatus: 'rejected', buyingDecisionBy: by, buyingDecisionOn: today(), buyingFeedback: reason, costStatus: 'rejected', rejectedReason: reason },
+      { type: 'rejected', by, role: 'Buying POC', comment: reason })
+  }
+
+  const addCostingReply = (id: string, round: number, reply: CostingComment) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id !== id || !o.history) return o
+      let done = false
+      const history = o.history.map(h => {
+        if (done || h.round !== round || !(h.type === 'revision-requested' || h.type === 'rejected')) return h
+        done = true
+        return { ...h, replies: [...(h.replies ?? []), reply] }
+      })
+      return { ...o, history }
+    }))
+  }
+
   return (
     <CostingStoreContext.Provider value={{
       orders, rfqs,
       updateOrder, addOrders, removeOrders,
       sendRFQ, updateRFQ, cancelRFQ, followUpRFQ, vendorSubmitRFQ,
+      buyingApprove, buyingRequestRevision, buyingReject, addCostingReply,
     }}>
       {children}
     </CostingStoreContext.Provider>

@@ -31,7 +31,7 @@ const DEMO_USERS: {
   { id: 'u1', name: 'Parthipan Kumar', email: 'poc@demo.com',       password: 'demo', role: 'sourcing-poc',  initials: 'PK', department: 'Sourcing',  avatarColor: '#CC785C', redirect: '/portfolio?tab=dashboard' },
   { id: 'u2', name: 'Priya Menon',     email: 'manager@demo.com',   password: 'demo', role: 'sourcing-mgr',  initials: 'PM', department: 'Sourcing',  avatarColor: '#B5633E', redirect: '/portfolio?tab=dashboard' },
   { id: 'u3', name: 'Megha Sharma',    email: 'category@demo.com',  password: 'demo', role: 'category-head', initials: 'MS', department: 'Buying',    avatarColor: '#92400E', redirect: '/category-head' },
-  { id: 'u4', name: 'Rahul Desai',     email: 'buyer@demo.com',     password: 'demo', role: 'buying-poc',    initials: 'RD', department: 'Buying',    avatarColor: '#1D4ED8', redirect: '/order-management?tab=grid' },
+  { id: 'u4', name: 'Rahul Desai',     email: 'buyer@demo.com',     password: 'demo', role: 'buying-poc',    initials: 'RD', department: 'Buying',    avatarColor: '#1D4ED8', redirect: '/buying-approvals' },
   { id: 'u5', name: 'Ankit Verma',     email: 'qa@demo.com',        password: 'demo', role: 'qa-mgr',        initials: 'AV', department: 'QA',        avatarColor: '#2E7D52', redirect: '/qa' },
   { id: 'u6', name: 'Arul Pandey',     email: 'inspector@demo.com', password: 'demo', role: 'qa-inspector',  initials: 'AP', department: 'QA',        avatarColor: '#0F766E', redirect: '/inspector' },
   { id: 'u7', name: 'Sunit Jain',      email: 'warehouse@demo.com', password: 'demo', role: 'warehouse-ops', initials: 'SJ', department: 'Warehouse', avatarColor: '#6B7280', redirect: '/warehouse' },
