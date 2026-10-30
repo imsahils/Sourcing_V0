@@ -457,6 +457,73 @@ function DetailDrawer({ order, onClose, onAct }: {
   )
 }
 
+// ─── Round comment thread ─────────────────────────────────────────────────────
+
+function initials(name: string) {
+  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+}
+
+function RoundComments({ orderId, round, ender }: { orderId: string; round: number; ender: CostingEvent }) {
+  const { addCostingReply } = useCostingStore()
+  const { currentUser } = useCurrentUser()
+  const [reply, setReply] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const name = currentUser.name && currentUser.name !== 'Guest' ? currentUser.name : 'Buying POC'
+  const role = currentUser.roleLabel || 'Buying POC'
+
+  const send = () => {
+    const text = reply.trim()
+    if (!text) return
+    addCostingReply(orderId, round, { by: name, role, date: new Date().toISOString().split('T')[0], text })
+    setReply('')
+    setOpen(false)
+  }
+
+  const Bubble = ({ by, r, date, text, isReply }: { by: string; r: string; date: string; text: string; isReply?: boolean }) => (
+    <div className={cn('flex gap-2', isReply && 'ml-6')}>
+      <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-[10px] font-semibold flex items-center justify-center flex-shrink-0 mt-0.5">
+        {initials(by)}
+      </div>
+      <div className="min-w-0">
+        <p className="text-[11px] text-slate-500">
+          <span className="font-semibold text-slate-700">{by}</span> · {r} · {fmtDate(date)}
+        </p>
+        <p className="text-xs text-slate-600 mt-0.5">{text}</p>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="pl-7 space-y-2 max-w-3xl">
+      {ender.comment && <Bubble by={ender.by} r={ender.role} date={ender.date} text={ender.comment} />}
+      {(ender.replies ?? []).map((rp, i) => (
+        <Bubble key={i} by={rp.by} r={rp.role} date={rp.date} text={rp.text} isReply />
+      ))}
+      {open ? (
+        <div className="ml-6 flex items-start gap-2">
+          <textarea
+            value={reply} onChange={e => setReply(e.target.value)} rows={2} autoFocus
+            placeholder="Write a response…"
+            className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-violet-400"
+          />
+          <div className="flex flex-col gap-1">
+            <button onClick={send} disabled={!reply.trim()}
+              className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-semibold hover:bg-violet-700 disabled:opacity-40">Send</button>
+            <button onClick={() => { setOpen(false); setReply('') }}
+              className="px-3 py-1 rounded-lg text-slate-500 text-xs hover:bg-slate-100">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setOpen(true)}
+          className="ml-6 flex items-center gap-1 text-[11px] font-medium text-violet-600 hover:text-violet-700">
+          <MessageSquare className="w-3 h-3" /> Reply
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 function Row({ order, selected, showCosting, onToggle, onOpen, onAct }: {
@@ -486,7 +553,7 @@ function Row({ order, selected, showCosting, onToggle, onOpen, onAct }: {
       cost: quote?.cost,
       breakdown: quote?.breakdown,
       outcome: ender?.type === 'rejected' ? 'Rejected' : 'Revised',
-      comment: ender?.comment,
+      ender,
     }
   })
   const hasHistory = priorRounds.length > 0
@@ -605,11 +672,11 @@ function Row({ order, selected, showCosting, onToggle, onOpen, onAct }: {
             <td className="px-3 py-2" />
             <td className="px-4 py-2" />
           </tr>
-          {pr.comment && (
+          {pr.ender?.comment && (
             <tr className="bg-slate-50 border-b border-slate-100">
               <td className="pl-4 pr-1" />
-              <td colSpan={colSpan - 1} className="px-3 pb-2.5 pt-0">
-                <p className="pl-10 text-xs text-slate-500 italic">“{pr.comment}”</p>
+              <td colSpan={colSpan - 1} className="px-3 pb-3 pt-0">
+                <RoundComments orderId={order.id} round={pr.round} ender={pr.ender} />
               </td>
             </tr>
           )}

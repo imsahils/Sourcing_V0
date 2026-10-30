@@ -24,6 +24,14 @@ export type CostingEventType =
   | 'revision-requested'  // Buying sent back for a revised quote
   | 'rejected'            // Buying rejected outright
 
+// A reply on a costing comment thread (e.g. Sourcing responding to Buying).
+export type CostingComment = {
+  by: string
+  role: string
+  date: string
+  text: string
+}
+
 export type CostingEvent = {
   round: number
   type: CostingEventType
@@ -31,6 +39,7 @@ export type CostingEvent = {
   role: string            // 'Vendor' | 'Sourcing POC' | 'Sourcing Manager' | 'Category Head' | 'Buying POC'
   date: string
   comment?: string
+  replies?: CostingComment[]  // thread of responses to `comment`
   cost?: number           // open-costing total/pc captured at this event
   breakdown?: OpenCostingBreakdown
 }
@@ -297,7 +306,11 @@ const INITIAL_ORDERS: CostingOrder[] = [
         breakdown: { mainFabricPrice: 160, mainFabricConsumption: 1.8, trimFabricPrice: 42, trimFabricConsumption: 0.6, trimCostThread: 78, cmp: 162, valueAddition: 34, testing: 14, logistic: 16, rejectionPct: 2, marginPct: 5 } },
       { round: 1, type: 'sourcing-approved', by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-04-30' },
       { round: 1, type: 'revision-requested', by: 'Rahul Desai', role: 'Buying POC', date: '2026-05-01',
-        comment: 'Quote is ~11% over target. Fill GSM looks high for the price band — please renegotiate poly-fill and CMP and resubmit.' },
+        comment: 'Quote is ~11% over target. Fill GSM looks high for the price band — please renegotiate poly-fill and CMP and resubmit.',
+        replies: [
+          { by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-05-03',
+            text: 'Agreed — took it back to the mill. Poly-fill GSM reduced to 220 and CMP down ₹12. Revised quote at ₹668 (+4.4%), resubmitting now.' },
+        ] },
       { round: 2, type: 'resubmitted', by: 'CAARVI TEXTILES', role: 'Vendor', date: '2026-05-05', cost: 668,
         breakdown: { mainFabricPrice: 150, mainFabricConsumption: 1.8, trimFabricPrice: 40, trimFabricConsumption: 0.6, trimCostThread: 72, cmp: 150, valueAddition: 30, testing: 14, logistic: 16, rejectionPct: 2, marginPct: 4 } },
       { round: 2, type: 'sourcing-approved', by: 'Meena Iyer', role: 'Sourcing Manager', date: '2026-05-08' },
@@ -577,6 +590,8 @@ type CostingStoreValue = {
   buyingApprove: (id: string, by: string, notes?: string) => void
   buyingRequestRevision: (id: string, by: string, feedback: string) => void
   buyingReject: (id: string, by: string, reason: string) => void
+  // Reply on a round's comment thread (the revision/rejection discussion).
+  addCostingReply: (id: string, round: number, reply: CostingComment) => void
 }
 
 const CostingStoreContext = createContext<CostingStoreValue | null>(null)
@@ -724,12 +739,25 @@ export function CostingStoreProvider({ children }: { children: ReactNode }) {
       { type: 'rejected', by, role: 'Buying POC', comment: reason })
   }
 
+  const addCostingReply = (id: string, round: number, reply: CostingComment) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id !== id || !o.history) return o
+      let done = false
+      const history = o.history.map(h => {
+        if (done || h.round !== round || !(h.type === 'revision-requested' || h.type === 'rejected')) return h
+        done = true
+        return { ...h, replies: [...(h.replies ?? []), reply] }
+      })
+      return { ...o, history }
+    }))
+  }
+
   return (
     <CostingStoreContext.Provider value={{
       orders, rfqs,
       updateOrder, addOrders, removeOrders,
       sendRFQ, updateRFQ, cancelRFQ, followUpRFQ, vendorSubmitRFQ,
-      buyingApprove, buyingRequestRevision, buyingReject,
+      buyingApprove, buyingRequestRevision, buyingReject, addCostingReply,
     }}>
       {children}
     </CostingStoreContext.Provider>
